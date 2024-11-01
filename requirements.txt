@@ -1,0 +1,15 @@
+Unidecode
+ffmpeg_python
+graphviz
+keras
+librosa
+matplotlib
+num2words
+opencv_python
+pandas
+pydub
+regex
+requests
+sounddevice
+tqdm
+umap_learn
