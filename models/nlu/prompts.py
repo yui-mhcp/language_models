@@ -43,11 +43,19 @@ If additional information are provided, you have to use them **if** they are rel
 _prompts_rag    = {
     'system_prompt' : {
         'fr'    : """
-{{ "Tu es un assistant IA. Tu dois répondre de manière brève et précise aux questions de l'utilisateur.\nSi des informations te sont fournies, utilise ces informations pour répondre **si** elles sont pertinentes." }}
+{{ "Tu es un assistant IA et tu dois répondre de manière brève et précise aux questions de l'utilisateur.\n" -}}
 
-{{- "<|start_header_id|>information<|end_header_id|>\n" -}}
+{{- "\nVoici différentes sources d'informations :\n\n" }}
+
 {%- for doc in documents %}
     {%- if not threshold is defined or doc.score >= threshold %}
+        {{- "<|start_header_id|>document<|end_header_id|>\n" }}
+        {%- if 'filename' in doc %}
+            {{- "Fichier : " + doc.filename + "\n\n" }}
+        {%- elif 'url' in doc %}
+            {{- "URL : " + doc.url + "\n\n" }}
+        {%- endif %}
+        
         {%- if 'title' in doc %}
             {{- "Titre du document : " + doc.title + "\n" }}
         {%- elif doc.section_titles %}
@@ -58,11 +66,19 @@ _prompts_rag    = {
 {%- endfor %}
 """.strip(),
         'en'    : """
-{{- "You are an AI assistant. You have to answer the best as possible to the user's queries.\nIf additional information are provided, you have to use them **if** they are relevant to answer the query." }}
+{{- "You are an AI assistant, and you have to answer the best as possible to the user's queries.\n\n" -}}
 
-{{- "<|start_header_id|>information<|end_header_id|>\n" -}}
+{{- "\nHere are the provided information :\n\n" }}
+
 {%- for doc in documents %}
     {%- if not threshold is defined or doc.score >= threshold %}
+        {{- "<|start_header_id|>information<|end_header_id|>\n" }}
+        {%- if 'filename' in doc %}
+            {{- "Filename : " + doc.filename + "\n\n" }}
+        {%- elif 'url' in doc %}
+            {{- "URL : " + doc.url + "\n\n" }}
+        {%- endif %}
+
         {%- if 'title' in doc %}
             {{- "Document title : " + doc.title + "\n" }}
         {%- elif doc.section_titles %}
@@ -71,6 +87,30 @@ _prompts_rag    = {
         {{- doc.text + "\n\n" }}
     {%- endif %}
 {%- endfor %}
+""".strip()
+    },
+    'format'    : {
+        'fr'    : """
+{{- text -}}
+
+{{- "\n\nRéponds UNIQUEMENT sur base des informations fournies !\n" -}}
+
+{% if add_source %}
+    {{- "La réponse doit explicitement mentionner les sources, par exemple en commençant par `comme mentionné dans ...`, ou `Selon ...`." -}}
+{% endif %}
+
+{{- "Si aucune information n'est pertinente, demande plus de précisions à l'utilisateur,\nSi la question n'a pas de rapport avec les informations, ne réponds pas.\n" -}}
+""".strip(),
+        'en'    : """
+{{- text -}}
+
+{{- "\n\nAnswer ONLY based on the provided information !\n" -}}
+
+{% if add_source %}
+    {{- "The answer must explicitely mention the source of the information, e.g., with `based on ...` or `As mentionned in ...`" -}}
+{% endif %}
+
+{{- "If no information is relevant to the question, ask more information to the user.\nIf the question is irrelevant or not related to any topic from the provided information, do not answer.\n" -}}
 """.strip()
     }
 }

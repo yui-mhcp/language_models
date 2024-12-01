@@ -9,9 +9,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .text_generator import TextGenerator
+from .tensorrt_runtime import TensorRTRuntime
+from .saved_model_runtime import SavedModelRuntime
+from .tensorrt_llm_runtime import TensorRTLLMRuntime
 
-class ChatModel(TextGenerator):
-    def get_output(self, * args, ** kwargs):
-        raise NotImplementedError()
-    
+runtimes    = {
+    'trt'   : TensorRTRuntime,
+    'trt_llm'   : TensorRTLLMRuntime,
+    'saved_model'   : SavedModelRuntime
+}

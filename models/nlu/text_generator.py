@@ -15,6 +15,7 @@ import logging
 from tqdm import tqdm as tqdm_progress_bar
 
 from loggers import timer
+from utils.search.vectors import build_vectors_db
 from utils import is_dataframe, load_json, dump_json
 from utils.keras_utils import ops
 from utils.text import parse_document
@@ -39,6 +40,8 @@ class TextGenerator(BaseLanguageModel):
         
         if not self.output_format:
             self.output_format = self.input_format
+        
+        self._databases = {}
     
     @property
     def input_signature(self):
@@ -85,6 +88,25 @@ class TextGenerator(BaseLanguageModel):
             ops.shape(output)[-1] <= self.max_output_length
         )
 
+    def get_vectors_database_file(self, *, name = None, filename = None, directory = None, ** _):
+        if not directory:   directory = self.pred_dir
+        if not filename:    filename = '{}.h5'.format(name or 'database')
+        
+        filename = os.path.join(directory, filename)
+        return filename, os.path.basename(filename).split('.')[0]
+    
+    def add_vectors_database(self, vectors, ** kwargs):
+        file, name = self.get_vectors_database_file(** kwargs)
+        vectors.save(file)
+        self._databases[name] = vectors
+    
+    def get_vectors_database(self, ** kwargs):
+        file, name = self.get_vectors_database_file(** kwargs)
+        
+        if name not in self._databases:
+            self._databases[name] = build_vectors_db(file)
+        return self._databases[name]
+    
     @timer
     def predict(self,
                 texts,
@@ -169,8 +191,9 @@ class TextGenerator(BaseLanguageModel):
             question,
             *,
             
-            k   = 10,
+            k   = 5,
             reverse = True,
+            vectors = None,
             retriever   = None,
             documents   = None,
             search_on_web   = None,
@@ -179,7 +202,7 @@ class TextGenerator(BaseLanguageModel):
                
             ** kwargs
            ):
-        if search_on_web is None: search_on_web = documents is None
+        if search_on_web is None: search_on_web = documents is None and vectors is None
         if isinstance(retriever, str):
             from models import get_pretrained
             retriever = get_pretrained(retriever)
@@ -205,9 +228,17 @@ class TextGenerator(BaseLanguageModel):
                 parsed.extend(doc)
         
         if retriever is not None:
-            vectors = retriever.embed(
-                parsed, to_numpy = True, ** retriever_config
+            save_db = retriever_config.pop('save', True)
+            
+            vectors = retriever.predict(
+                parsed, to_numpy = True, save = False, ** retriever_config
             )
+            if save_db:
+                self.add_vectors_database(vectors, ** retriever_config)
+        
+        if vectors is not None:
+            if isinstance(vectors, str):
+                vectors = self.get_vectors_database(name = vectors, ** kwargs)
             
             parsed = vectors.search(question, k = k, reverse = reverse)
 
