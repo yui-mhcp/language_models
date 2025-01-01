@@ -12,7 +12,11 @@
 import os
 
 from utils import import_objects
+from .prompts import set_prompt, get_prompts
 
 globals().update(import_objects(
     __package__.replace('.', os.path.sep), allow_functions = False
 ))
+
+def stream_llm(model):
+    pass
