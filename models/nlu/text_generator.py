@@ -1,5 +1,5 @@
-# Copyright (C) 2022-now yui-mhcp project author. All rights reserved.
-# Licenced under a modified Affero GPL v3 Licence (the "Licence").
+# Copyright (C) 2025-now yui-mhcp project author. All rights reserved.
+# Licenced under the Affero GPL v3 Licence (the "Licence").
 # you may not use this file except in compliance with the License.
 # See the "LICENCE" file at the root of the directory for the licence information.
 #
@@ -10,18 +10,16 @@
 # limitations under the License.
 
 import os
-import time
 import logging
+import inspect
 
-from tqdm import tqdm as tqdm_progress_bar
-
-from loggers import timer
-from utils.search.vectors import build_vectors_db
-from utils import is_dataframe, load_json, dump_json, create_stream, pad_batch
-from utils.keras_utils import ops
-from utils.text import Conversation, parse_document
+from loggers import Timer, timer
+from utils.text import format_text
+from utils.callbacks import apply_callbacks
 from .prompts import add_prompt_wrapper
 from .base_language_model import BaseLanguageModel
+from .tools import execute_code, extract_code, format_code_result
+from .conversations import Chat, Conversation, Message, get_message_selector
 
 logger = logging.getLogger(__name__)
 
@@ -39,367 +37,249 @@ class TextGenerator(BaseLanguageModel):
     
     output_signature    = BaseLanguageModel.text_signature
     
-    def __init__(self, * args, output_format = None, max_output_length = None, ** kwargs):
-        self.output_format  = output_format
-        self._max_output_length = max_output_length
-
+    def __init__(self, * args, ** kwargs):
         super().__init__(* args, ** kwargs)
         
-        if not self.output_format:
-            self.output_format = self.input_format
-        
-        self._databases = {}
-        self._conversations = {}
+        self._chats = {}
     
     @property
     def max_output_length(self):
-        if self._max_output_length: return self._max_output_length
-        elif hasattr(self.model, 'max_output_length'):
-            return self.model.max_output_length
-        return None
+        return getattr(self.model, 'max_output_length', None)
     
-    @property
-    def input_signature(self):
-        return (self.text_signature, self.text_signature)
-
-    @property
-    def training_hparams(self):
-        return super().training_hparams(
-            max_output_length   = None,
-            teacher_forcing_eval    = True,
-            eval_infer_config   = {},
-            show_input  = None
-        )
-
-    def infer(self, * args, ** kwargs):
-        if self.max_output_length:
-            kwargs.setdefault('max_length', self.max_output_length)
-        
-        return super().infer(* args, ** kwargs)
-    
-    def prepare_data(self, data):
-        inputs, outputs = super().encode_data(data)
-
-        if self.is_encoder_decoder:
-            if not isinstance(outputs, tuple):
-                inputs, outputs = (inputs, outputs[:-1]), outputs[1:]
+    def get_chat(self, chat_id):
+        if chat_id not in self._chats:
+            filename = os.path.join(self.conv_dir, '{}.json'.format(chat_id))
+            if os.path.exists(filename):
+                self._chats[chat_id] = Chat.load(filename)
             else:
-                inputs, outputs = (inputs, outputs[0][:-1]), (outputs[0][1:], ) + outputs[1:]
-        elif isinstance(outputs, tuple):
-            if self.sos_token: outputs = (outputs[0][1:], ) + outputs[1:]
-            if self.eos_token: inputs  = inputs[:-1]
-            inputs = ops.concat([inputs, outputs[0]], axis = -1)
-        else:
-            if self.sos_token: outputs = outputs[1:]
-            if self.eos_token: inputs  = inputs[:-1]
-            inputs = ops.concat([inputs, outputs], axis = -1)
-
-        return inputs, outputs
+                self._chats[chat_id] = Chat(id = chat_id)
+        
+        return self._chats[chat_id]
     
-    def filter_output(self, output):
-        if isinstance(outputs, tuple): output = output[0]
-        return ops.logical_and(
-            ops.all(ops.shape(output) > 0), 
-            ops.shape(output)[-1] <= self.max_output_length
+    def get_conv(self, chat_id, ** kwargs):
+        chat = self.get_chat(chat_id)
+        return chat, chat.get_conv(** kwargs)
+    
+    def get_messages(self, chat_id, *, chat = None, conv = None, message_selector = 'last', ** kwargs):
+        if conv is None: chat, conv = self.get_conv(chat_id, ** kwargs)
+        if conv is None: return (None, None, [])
+        
+        selector = get_message_selector(message_selector)
+        return chat, conv, selector.get_messages(
+            conv = conv, chat = chat, tokenizer = self.tokenizer, ** kwargs
         )
-
-    def get_conversation(self, id = None, directory = None):
-        if not id: id = 'default'
-        
-        if id not in self._conversations:
-            if not directory: directory = self.conv_dir
-            os.makedirs(directory, exist_ok = True)
-            
-            if id + '.json' not in os.listdir(directory):
-                conv = Conversation(id = id)
-            else:
-                conv = Conversation.load(os.path.join(directory, id + '.json'))
-            self._conversations[id] = conv
-        
-        return self._conversations[id]
-        
-    def get_vectors_database_file(self, *, name = None, filename = None, directory = None, ** _):
-        if name and os.path.isfile(name):
-            filename = name
-        else:
-            if not directory:   directory = self.vectors_dir
-            if not filename:    filename = '{}.h5'.format(name or 'database')
-
-            filename = os.path.join(directory, filename)
-        return filename, os.path.basename(filename).split('.')[0]
-    
-    def add_vectors_database(self, vectors, ** kwargs):
-        file, name = self.get_vectors_database_file(** kwargs)
-        self._databases[name] = vectors
-    
-    def get_vectors_database(self, ** kwargs):
-        file, name = self.get_vectors_database_file(** kwargs)
-
-        if self._databases.get(name, None) is None:
-            self._databases[name] = build_vectors_db(file)
-        return self._databases[name]
     
     @timer
-    def predict(self,
-                texts,
-                batch_size = 16,
-                *,
-                
-                format  = None,
-                
-                stream_text = False,
-                stream_callback = None,
-                
-                stop_words  = None,
-                max_input_len   = None,
-                max_new_tokens  = 512,
-                add_answer_start    = True,
-                
-                save    = False,
-                directory   = None,
-                overwrite   = False,
-                
-                chat_id = None,
-                chat_mode   = None,
-                chat_filter = 5,
-                
-                method  = 'beam',
-                num_beams   = 5,
-                num_sentences   = 1,
-                
-                tqdm    = 'auto',
-                
+    @add_prompt_wrapper('default')
+    def infer(self,
+              text,
+              *,
+              
+              format    = None,
+              
+              chat  = None,
+              conv  = None,
+              chat_id   = 'default',
+              conv_id   = None,
+              new_conv  = False,
+              messages  = None,
+              message_selector  = 'last',
+              max_input_length  = 4096,
+              
+              tools = None,
+              max_depth = 5,
+              _depth    = 0,
+              
+              possible_answers  = None,
+              
+              stop_words  = None,
+              max_new_tokens  = 2048,
+              add_answer_start    = True,
+
+              stream_text   = False,
+              stream_callback   = None,
+
+              request_id    = None,
+              wait_finalization = False,
+              _initial_conv_state   = None,
+
+              callbacks = None,
+              predicted = None,
+
+              ** kwargs
+             ):
+        if hasattr(stream_callback, 'build'): stream_callback.build()
+        
+        query = text
+        if format: text = format_text(format, text = text, ** kwargs)
+        
+        if messages is None:
+            chat, conv, messages = self.get_messages(
+                conv    = conv,
+                chat_id = chat_id,
+                conv_id = conv_id,
+                new_conv    = new_conv,
+                max_length  = max_input_length,
+                message_selector    = message_selector,
                 ** kwargs
-               ):
-        if not max_input_len: max_input_len = self.max_output_length
-        elif self.max_input_length: max_input_len = min(max_input_len, self.max_output_length)
-        if chat_mode is None: chat_mode = chat_id is not None
-        if is_dataframe(texts):              texts = texts.to_dict('records')
-        elif isinstance(texts, (str, dict)): texts = [texts]
-        if tqdm == 'auto': tqdm = tqdm_progress_bar if len(texts) > 1 else lambda x: x
-        
-        now = time.time()
-        
-        if not save and not chat_id: chat_id = '__unsave__'
-        
-        conv     = self.get_conversation(chat_id, directory = directory)
-        messages = []
-        if chat_mode:
-            if not chat_filter:
-                messages = conv.filter(** kwargs)
-            elif isinstance(chat_filter, int):
-                messages = conv.last_conv[- chat_filter * 2 :]
-            elif isinstance(chat_filter, dict):
-                messages = conv.filter(** {** kwargs, ** chat_filter})
-            else:
-                raise ValueError('Unsupported filter : {}'.format(conv_filter))
-            
-            if logger.isEnabledFor(logging.DEBUG) and messages:
-                logger.debug('Messages : {}'.format(messages))
-        
-        if format:
-            texts = [
-                self.text_encoder.apply_format(format, text = text, role = 'user', ** kwargs)
-                for text in texts
-            ]
-
-        inputs = self.get_input(texts, messages = messages, max_length = max_input_len, ** kwargs)
-        input_texts = self.decode_text(inputs)
-        
-        if stop_words:
-            if isinstance(stop_words, str):
-                stop_words = [self.encode_text(
-                    stop_words, add_sos = False, add_eos = False, return_type = 'list'
-                )]
-            elif isinstance(stop_words[0], str):
-                stop_words = self.encode_text(
-                    stop_words, add_sos = False, add_eos = False, return_type = 'list'
-                )
-            elif isinstance(stop_words[0], int):
-                stop_words = [stop_words]
-            
-            kwargs['stop_words_list'] = [stop_words]
-        
-        kwargs.update({
-            'max_input_len' : max_input_len,
-            'max_new_tokens'    : max_new_tokens,
-        })
-        if stream_text: kwargs['decode_fn'] = self.decode_output
-        
-        results = []
-        for i in tqdm(range(0, len(inputs), batch_size)):
-            out = self.compiled_infer(
-                inputs[i : i + batch_size], stream_callback = stream_callback, ** kwargs
             )
-            out = self.decode_output(out)
-
-            for j, (inp, pred) in enumerate(zip(texts[i * batch_size : (i + 1) * batch_size], out)):
-                if isinstance(pred, list) and len(pred) == 1: pred = pred[0]
-                if kwargs.get('answer_start', None) and add_answer_start:
-                    pred = kwargs['answer_start'] + pred
-                
-                conv.append(
-                    inp, role = 'user', time = now, new_conv = not messages, ** kwargs
-                )
-                conv.append(
-                    pred, role = 'assistant', infos = {
-                        ** kwargs,
-                        'user'  : None,
-                        'user_id'   : None,
-                        'query' : inp,
-                        'input' : input_texts[i + j],
-                        'input_tokens'  : inputs[i + j]
-                    }
-                )
-                results.append(conv[-1])
-
-        if save:
-            conv.save(os.path.join(directory or self.conv_dir, str(conv.id) + '.json'))
-
-        return results
-    
-    @add_prompt_wrapper('answer')
-    def answer(self, question, *, possible_answers = None, documents = None, ** kwargs):
+        
+        if _depth == 0:
+            if conv is not None and _initial_conv_state is None:
+                _initial_conv_state = conv.get_state()
+        
+            if tools and self.runtime == 'trt_llm':
+                self.model.engine.logits_processor_map['tool_stopper'].tokenizer = self.tokenizer
+                if 'tool_stopper' not in kwargs.get('logits_processor_names', []):
+                    kwargs.setdefault('logits_processor_names', []).append('tool_stopper')
+        
         if possible_answers:
             kwargs['allowed_tokens'] = pad_batch(
                 self.encode_text(
-                    possible_answers, add_eos = False, add_sos = False, return_type = 'np'
+                    possible_answers, add_sos_and_eos = False, return_type = 'np'
                 ),
                 pad_value = self.blank_token_idx,
                 dtype = 'int32'
             )
-        
-        if documents:
-            if not isinstance(documents, (list, tuple)): documents = [documents]
-            
-            parsed = []
-            for doc in documents:
-                if isinstance(doc, str):
-                    parsed.extend(parse_document(doc, ** kwargs))
-                elif isinstance(doc, dict):
-                    parsed.append(doc)
-                elif isinstance(doc, list):
-                    parsed.extend(doc)
-                else:
-                    raise ValueError('Unsupported document format : {}'.format(doc))
-            documents = parsed
-        
-        if not question:
-            assert documents, 'You must provide a question or documents'
-            question = '\n\n'.join([para['text'].strip('\n') for para in documents if 'text' in para])
-            documents = None
-        
-        return self.predict(question, documents = documents, ** kwargs)
 
-    translate   = add_prompt_wrapper('translate', fn = answer)
-    reformulate = add_prompt_wrapper('reformulate', fn = answer)
-    describe    = add_prompt_wrapper('describe', fn = answer)
-    summarize   = add_prompt_wrapper('summarize', fn = answer)
-    extract_entities    = add_prompt_wrapper('extract_entities', fn = answer)
+        prompt, tokens = self.get_input(
+            text,
+            messages    = messages,
+            pinned_messages = conv.pinned if conv is not None else [],
+            python_tools    = tools,
 
-    @add_prompt_wrapper('rag')
-    def rag(self,
-            question,
-            *,
+            max_length  = max_input_length,
+            return_text     = True,
             
-            k   = 10,
-            reverse = True,
-            informations    = None,
-            
-            vectors = None,
-            retriever   = None,
-            documents   = None,
-            retriever_config    = {},
-            
-            search_on_web   = None,
-            search_config   = {},
-               
             ** kwargs
-           ):
-        if search_on_web is None: search_on_web = documents is None and vectors is None
+        )
         
-        parsed = []
-        if documents:
-            if not isinstance(documents, (list, tuple)): documents = [documents]
+        if hasattr(stream_callback, 'is_stopped') and stream_callback.is_stopped(request_id):
+            if _depth == 0: stream_callback.pop(request_id)
+            return {}
+        
+        out = self.compiled_infer(
+            tokens[None],
             
-            for doc in documents:
-                if isinstance(doc, str):
-                    parsed.extend(parse_document(doc, ** kwargs))
-                elif isinstance(doc, dict):
-                    parsed.append(doc)
-                elif isinstance(doc, list):
-                    parsed.extend(doc)
-                else:
-                    raise ValueError('Unsupported document format : {}'.format(doc))
-        
-        if search_on_web:
-            from utils.search.web import search
+            max_new_tokens  = max_new_tokens,
             
-            for doc in search(question, ** kwargs)['results']:
-                parsed.extend(doc)
-        
-        if retriever is not None:
-            if isinstance(retriever, str):
-                from models import get_pretrained
-                retriever = get_pretrained(retriever)
-
-            retriever_config = {
-                ** retriever_config, 'save' : retriever_config.get('save', True)
-            }
-            vectors = retriever.predict(parsed, to_numpy = True, ** retriever_config)
-        
-        if vectors is None:
-            raise RuntimeError('`vectors` is None, which is unexpected for a RAG method')
-        
-        if isinstance(vectors, str):
-            vectors = self.get_vectors_database(name = vectors, ** kwargs)
-
-        if not informations:                     informations = [question]
-        elif not isinstance(informations, list): informations = [informations]
-        
-        retrieved, _texts = [], set()
-        for info in informations:
-            if not isinstance(info, dict): info = {'query' : info}
-            retrieved_info = vectors.search(info['query'], k = k, reverse = reverse)
+            request_id  = request_id,
+            decode_fn   = self.decode_output if stream_text else None,
+            stream_callback = stream_callback,
             
-            if 'question' in info:
-                retrieved_info = [{'text' : self.answer(
-                    info['question'], documents = retrieved_info
-                )[0]}]
+            ** kwargs
+        )
+        
+        pred = self.decode_output(out)[0]
+        if isinstance(pred, list) and len(pred) == 1: pred = pred[0]
+        if add_answer_start and kwargs.get('answer_start', None):
+            pred = kwargs['answer_start'] + pred
+
+        _abort = (
+            hasattr(stream_callback, 'is_stopped') and stream_callback.is_stopped(request_id)
+        )
+
+        if not _abort:
+            if conv is not None:
+                if text:
+                    conv.append(
+                        text, role = 'user', query = query, format = format, ** kwargs
+                    )
+                conv.append(
+                    pred, role = 'assistant', prompt = prompt
+                )
             
-            for ret in retrieved_info:
-                if ret['text'] not in _texts:
-                    retrieved.append(ret)
-                    _texts.add(ret['text'])
+            if tools:
+                tool_code = extract_code(pred)
+                if len(tool_code) == 1: tool_code = tool_code[0]
+                
+                if tool_code and 'print(' in tool_code or any(tool.name + '(' in tool_code for tool in tools):
+                    if logger.isEnabledFor(logging.DEBUG):
+                        logger.debug('Tool call detected :\n{}'.format(tool_code))
+            
+                    tool_result  = execute_code(
+                        tool_code, tools = tools, conv = conv, model = self
+                    )
+                    tool_message = format_code_result(tool_result)
+                    if logger.isEnabledFor(logging.DEBUG):
+                        logger.debug('Tools call result : {}'.format(tool_message))
 
-        return self.answer(question, documents = retrieved, ** kwargs)
+                    if tool_message:
+                        conv.append(
+                            tool_message,
+                            role    = 'tool_result',
+                            code    = tool_code,
+                            result  = tool_result
+                        )
 
-    def stream_fn(self,
-                  text,
-                  task      = 'answer',
-                  chat_mode = True,
-                  use_tree_reasoning = False,
-                  ** kwargs
-                 ):
-        if not hasattr(self, task):
-            raise ValueError('The task `{}` does not exist'.format(task))
-        elif task != 'predict' and not hasattr(getattr(self, task), 'prompt_key'):
-            raise ValueError('`{}` is not a prediction method !'.format(task))
+                        return self.infer(
+                            None,
+                            chat    = chat,
+                            conv    = conv,
+                            message_selector    = message_selector,
+                            max_input_length    = max_input_length,
+
+                            request_id  = request_id,
+                            stream_text = stream_text,
+                            stream_callback = stream_callback,
+                            _initial_conv_state = _initial_conv_state,
+
+                            tools   = tools if _depth + 1 < max_depth else None,
+                            max_depth   = max_depth,
+                            _depth  = _depth + 1,
+                            _initial_message_idx    = _initial_message_idx,
+
+                            stop_words  = None,
+                            max_new_tokens  = max_new_tokens,
+                            add_answer_start    = add_answer_start,
+
+                            _add_prompts    = False,
+
+                            ** kwargs
+                        )
+
+        result = {
+            'predicted' : pred,
+            
+            'query' : query,
+            'format'    : format,
+            'prompt'    : prompt,
+            'input_tokens'  : tokens,
+            ** kwargs
+        }
+
+        if _depth > 0: return result
         
-        if isinstance(text, list): text = ' '.join(text)
-        if use_tree_reasoning:
-            raise NotImplementedError('Work in progress !')
+        if stream_callback is not None:
+            if request_id is not None:
+                if wait_finalization:
+                    _abort = not stream_callback.wait_finalize(request_id)
+
+                stream_callback((request_id, inspect._empty))
+                stream_callback({'id' : request_id, 'type' : 'status', 'content' : 'finished'})
+
+            else:
+                if not callable(stream_callback): stream_callback = stream_callback.put
+                stream_callback(inspect._empty)
+
+        if _abort and _initial_conv_state is not None:
+            logger.info('Resetting conv to its initial state')
+            conv.set_state(_initial_conv_state)
+
+        if callbacks:
+            apply_callbacks(callbacks, {}, result, save = False)
+
+        if request_id is not None:
+            logger.info('Request {} {} !'.format(
+                request_id, 'finished' if not _abort else 'aborted'
+            ))
         
-        return getattr(self, task)(text, chat_mode = chat_mode, ** kwargs)[0]
+        return result
+
+    answer  = add_prompt_wrapper('answer', fn = infer)
     
-    def stream(self, stream, ** kwargs):
-        return create_stream(self.stream_fn, stream = stream, ** kwargs)
-        
-    def get_config(self):
-        config = super().get_config()
-        config.update({
-            'output_format' : self.output_format,
-            'max_output_length' : self.max_output_length
-        })
-        return config
-
+    translate   = add_prompt_wrapper('translate',   fn = answer)
+    reformulate = add_prompt_wrapper('reformulate', fn = answer)
+    describe    = add_prompt_wrapper('describe',    fn = answer)
+    summarize   = add_prompt_wrapper('summarize',   fn = answer)
+    extract_entities    = add_prompt_wrapper('extract_entities', fn = answer)

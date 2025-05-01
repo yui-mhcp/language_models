@@ -1,5 +1,5 @@
-# Copyright (C) 2022-now yui-mhcp project author. All rights reserved.
-# Licenced under a modified Affero GPL v3 Licence (the "Licence").
+# Copyright (C) 2025-now yui-mhcp project author. All rights reserved.
+# Licenced under the Affero GPL v3 Licence (the "Licence").
 # you may not use this file except in compliance with the License.
 # See the "LICENCE" file at the root of the directory for the licence information.
 #
@@ -11,8 +11,6 @@
 
 import keras
 import keras.ops as K
-
-from utils.keras_utils import ops
 
 @keras.saving.register_keras_serializable('custom_loss')
 class GE2ELoss(keras.losses.Loss):
@@ -125,7 +123,11 @@ class GE2ELoss(keras.losses.Loss):
         centroids_excl = centroids_excl / K.cast(n_samples - 1, embeddings.dtype)
 
         # Compute mask (shape = (nb_speakers, nb_utterances, nb_speakers, 1))
-        mask = ops.eye(n_labels, dtype = 'bool')
+        if keras.backend.backend() == 'tensorflow':
+            import tensorflow as tf
+            mask = tf.eye(n_labels, dtype = 'bool')
+        else:
+            mask = K.eye(n_labels, dtype = 'bool')
         mask = K.repeat(mask, n_samples, axis = 0)
         mask = K.reshape(mask, [n_labels, n_samples, n_labels, 1])
 
@@ -135,19 +137,19 @@ class GE2ELoss(keras.losses.Loss):
         )
         embeddings  = embeddings[:, :, None, :]
         if distance_metric == 'euclidian':
-            xx = einsum_matmul(embeddings, embeddings)
-            yy = einsum_matmul(centroids, centroids)
-            xy = einsum_matmul(embeddings, centroids)
+            xx = _einsum_matmul(embeddings, embeddings)
+            yy = _einsum_matmul(centroids, centroids)
+            xy = _einsum_matmul(embeddings, centroids)
             return - K.sqrt(xx - 2 * xy + yy)
         elif distance_metric == 'cosine':
-            return einsum_matmul(
+            return _einsum_matmul(
                 K.divide_no_nan(embeddings, K.norm(embeddings, axis = -1, keepdims = True)),
                 K.divide_no_nan(centroids, K.norm(centroids, axis = -1, keepdims = True))
             )
         elif distance_metric == 'dp':
-            return einsum_matmul(label_embeddings, centroids)
+            return _einsum_matmul(label_embeddings, centroids)
         elif distance_metric == 'manhattan':
             return - K.sum(K.abs(embeddings - centroids), axis = -1)
 
-def einsum_matmul(x, y):
+def _einsum_matmul(x, y):
     return K.einsum('...i, ...i -> ...', x, y)

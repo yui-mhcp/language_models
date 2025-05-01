@@ -12,29 +12,38 @@ Check the [CHANGELOG](https://github.com/yui-mhcp/yui-mhcp/blob/main/CHANGELOG.m
 ## Project structure
 
 ```bash
-├── custom_architectures
-├── custom_layers
-├── custom_train_objects
-├── loggers
-├── models
-│   ├── encoder
-│   │   └── text_encoder.py     : text encoder used in the RAG pipeline
-│   ├── nlu
-│   │   ├── base_language_model.py  : base abstraction for language models
-│   │   ├── prompts.py          : default prompts for different tasks / languages
-│   │   └── text_generator.py   : text generator (large language models)
-│   ├── utils
-│   │   └── trt_llm_runner.py   : wrapper for the `tensorrt_llm.ModelRunner` class
-├── pretrained_models
-├── unitests
-├── utils
-├── speaker_verification.ipynb
-└── information_retrieval.ipynb
+├── architectures            : utilities for model architectures
+│   ├── layers               : custom layer implementations
+│   ├── transformers         : transformer architecture implementations
+│   ├── common_blocks.py     : defines common blocks (e.g., Conv + BN + ReLU)
+│   ├── generation_utils.py  : utilities for text and sequence generation
+│   ├── hparams.py           : hyperparameter management
+│   └── simple_models.py     : defines classical models such as CNN / RNN / MLP and siamese
+├── custom_train_objects     : custom objects used in training / testing
+├── loggers                  : logging utilities for tracking experiment progress
+├── models                   : main directory for model classes
+│   ├── interfaces           : directories for interface classes
+│   ├── nlu                  : OCR implementations
+│   │   ├── conversations        : general module handling conversation management
+│   │   │   ├── base_chat.py         : base interface for messages, conversations and chats
+│   │   │   └── message_selector.py  : interfaces for message selection to build the message history passed to the LLM
+│   │   ├── prompts              : general module handling prompts formats
+│   │   │   ├── base_prompt.py       : base interface to define multilingual prompts
+│   │   │   └── task_prompts.py      : generic prompts formatted for different tasks
+│   │   ├── tools                : general module for tools support
+│   │   │   ├── openweathermap_tool.py : tool calling the OWM api
+│   │   │   ├── tool_executor.py       : safe python script execution for tool calling
+│   │   │   └── tool.py                : interfaces for tool definition
+│   │   ├── base_language_model.py : abstract class for LM models
+│   │   └── text_generator.py      : implementation of generative language models
+│   └── weights_converter.py : utilities to convert weights between different models
+├── tests                    : unit and integration tests for model validation
+├── utils                    : utility functions for data processing and visualization
+├── LICENCE                  : project license file
+├── example_llm.ipynb        : notebook illustrating different language models tasks + TRT-LLM engine creation
+├── README.md                : this file
+└── requirements.txt         : required packages
 ```
-
-Check [the main project](https://github.com/yui-mhcp/base_dl_project) for more information about the unextended modules / structure / main classes. 
-
-**Important Note** : this project is the keras 3 extension of the [NLP](https://github.com/yui-mhcp/nlp) project. When this project will be in a more stable stage, the older one will be removed in favor of this one. 
 
 ## Installation and usage
 
@@ -48,11 +57,13 @@ Check [this installagion guide](https://github.com/yui-mhcp/yui-mhcp/blob/main/I
 - [x] Support the streaming mode with a `streaming_callback` argument
 - [x] Support batched inference
 - [x] Refactor the `html` processing method to have a common return structure for all documents and web-search results
-- [ ] Support discussion handling (i.e., by saving and forwarding previous messages)
-- [ ] Support function calling
+- [x] Support discussion handling (i.e., by saving and forwarding previous messages)
+- [ ] Save/load conversations/chats in the `infer` method
+- [x] Support function calling
+- [ ] Support workflows
 - [ ] Support multi-modality (e.g., text + image --> text)
-- [ ] Support chunking documents with overlap between chunks
-- [ ] Support grouping documents by sections/... for better chunks
+- [x] Support chunking documents with overlap between chunks
+- [x] Support grouping documents by sections/... for better chunks
 - [x] Define custom prompts for standard `NLU` tasks, with an appropriate method :
     - [x] Question-Answering (Q&A)
     - [x] Machine Translation
@@ -60,28 +71,23 @@ Check [this installagion guide](https://github.com/yui-mhcp/yui-mhcp/blob/main/I
     - [x] Text reformulation
     - [x] Entity extraction
     - [x] Retriever-Augmented Generator (RAG)
-    - [ ] Function calling
-    - [ ] Multi-modal inputs
+    - [x] Function calling
 
 ## Contacts and licence
 
-Contacts :
-- **Mail** : `yui-mhcp@tutanota.com`
-- **[Discord](https://discord.com)** : yui0732
+Contacts:
+- **Mail**: `yui-mhcp@tutanota.com`
+- **[Discord](https://discord.com)**: yui0732
 
-### Terms of use
+This project is licensed under the GNU Affero General Public License v3.0 (AGPL-3.0). See the [LICENSE](LICENSE) file for details.
 
-The goal of these projects is to support and advance education and research in Deep Learning technology. To facilitate this, all associated code is made available under the [GNU Affero General Public License (AGPL) v3](AGPLv3.licence), supplemented by a clause that prohibits commercial use (cf the [LICENCE](LICENCE) file).
+This license allows you to use, modify, and distribute the code, as long as you include the original copyright and license notice in any copy of the software/source. Additionally, if you modify the code and distribute it, or run it on a server as a service, you must make your modified version available under the same license.
 
-These projects are released as "free software", allowing you to freely use, modify, deploy, and share the software, provided you adhere to the terms of the license. While the software is freely available, it is not public domain and retains copyright protection. The license conditions are designed to ensure that every user can utilize and modify any version of the code for their own educational and research projects.
+For more information about the AGPL-3.0 license, please visit [the official website](https://www.gnu.org/licenses/agpl-3.0.html)
 
-If you wish to use this project in a proprietary commercial endeavor, you must obtain a separate license. For further details on this process, please contact me directly.
+## Citation
 
-For my protection, it is important to note that all projects are available on an "As Is" basis, without any warranties or conditions of any kind, either explicit or implied. However, do not hesitate to report issues on the repository's project, or make a Pull Request to solve it :smile: 
-
-### Citation
-
-If you find this project useful in your work, please add this citation to give it more visibility ! :yum:
+If you find this project useful in your work, please add this citation to give it more visibility! :yum:
 
 ```
 @misc{yui-mhcp
@@ -92,13 +98,3 @@ If you find this project useful in your work, please add this citation to give i
     howpublished    = {\url{https://github.com/yui-mhcp}}
 }
 ```
-
-## Notes and references 
-
-Tutorials : 
-- [LLama-index tutorial](https://docs.llamaindex.ai/en/stable/module_guides/indexing/vector_store_index/) on information retrieval with dense vectors
-
-Github project :
-- [TensorRT-LLM](https://github.com/NVIDIA/TensorRT-LLM) : the TensorRT-LLM library that proposes highly optimized LLM architectures in C++
-- [LLama-index](https://github.com/run-llama/llama_index) : well known library for information retrieval
-- [langchain](https://github.com/langchain-ai/langchain) : well known library for large language models

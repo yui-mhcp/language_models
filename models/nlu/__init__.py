@@ -1,5 +1,5 @@
-# Copyright (C) 2022-now yui-mhcp project author. All rights reserved.
-# Licenced under a modified Affero GPL v3 Licence (the "Licence").
+# Copyright (C) 2025-now yui-mhcp project author. All rights reserved.
+# Licenced under the Affero GPL v3 Licence (the "Licence").
 # you may not use this file except in compliance with the License.
 # See the "LICENCE" file at the root of the directory for the licence information.
 #
@@ -10,13 +10,27 @@
 # limitations under the License.
 
 import os
+import importlib
 
-from utils import import_objects
-from .prompts import set_prompt, get_prompts
+from utils import setup_environment
+from ..interfaces import BaseModel
 
-globals().update(import_objects(
-    __package__.replace('.', os.path.sep), allow_functions = False
-))
+for module in os.listdir(__package__.replace('.', os.path.sep)):
+    if module.startswith(('.', '_')) or '_old' in module: continue
+    module = importlib.import_module(__package__ + '.' + module.replace('.py', ''))
+    
+    globals().update({
+        k : v for k, v in vars(module).items() if isinstance(v, type) and issubclass(v, BaseModel)
+    })
 
-def stream_llm(model):
-    pass
+def get_model(model):
+    if isinstance(model, (str, dict)):
+        from models import get_pretrained
+        
+        model = get_pretrained(model)
+    
+    return model
+
+def stream(stream, *, model, ** kwargs):
+    setup_environment(** kwargs)
+    return get_model(model).stream(stream, ** kwargs)

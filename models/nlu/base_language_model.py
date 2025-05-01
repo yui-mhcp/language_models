@@ -1,5 +1,5 @@
-# Copyright (C) 2022-now yui-mhcp project author. All rights reserved.
-# Licenced under a modified Affero GPL v3 Licence (the "Licence").
+# Copyright (C) 2025-now yui-mhcp project author. All rights reserved.
+# Licenced under the Affero GPL v3 Licence (the "Licence").
 # you may not use this file except in compliance with the License.
 # See the "LICENCE" file at the root of the directory for the licence information.
 #
@@ -9,20 +9,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from utils import partial, is_dataframe, normalize_keys
-from utils.keras_utils import ops
-from loggers import timer, time_logger
-from utils.text import get_encoder
-from models.interfaces.base_text_model import BaseTextModel
-from custom_architectures.transformers_arch import get_pretrained_transformer
+from functools import partial
 
-_alternative_keys   = {
-    'text'      : ('context', 'content', 'paragraph'),
-    'answer'    : ('answers', ),
-    'context'   : ('paragraph', 'text', 'contexts', 'paragraphs', 'texts'),
-    'title'     : ('titles', )
-}
-
+from utils import FunctionCallback, QueueCallback, is_dataframe
+from utils.keras import ops
+from loggers import Timer, timer
+from ..interfaces.base_text_model import BaseTextModel
 
 class BaseLanguageModel(BaseTextModel):
     _default_pretrained_model   = None
@@ -32,8 +24,8 @@ class BaseLanguageModel(BaseTextModel):
     
     def __init__(self, lang, input_format = None, max_input_length = None, ** kwargs):
         pretrained = kwargs.pop('pretrained', self._default_pretrained_model)
-        if pretrained and 'text_encoder' not in kwargs:
-            kwargs['text_encoder'] = get_encoder(lang = None, text_encoder = pretrained)
+        if pretrained and 'tokenizer' not in kwargs:
+            kwargs['tokenizer'] = get_tokenizer(lang = None, tokenizer = pretrained)
 
         self._init_text(lang = lang, ** kwargs)
         
@@ -49,6 +41,8 @@ class BaseLanguageModel(BaseTextModel):
         if model is not None: return super().build(model = model)
         
         if pretrained is not None:
+            from architectures.transformers import get_pretrained_transformer
+
             super().build(
                 model = get_pretrained_transformer(pretrained, ** kwargs)
             )
@@ -81,7 +75,6 @@ class BaseLanguageModel(BaseTextModel):
         
         return des
     
-
     def prepare_input(self, data = None, ** kwargs):
         if is_dataframe(data): data = data.to_dict('records')
         if isinstance(data, list):
@@ -93,22 +86,21 @@ class BaseLanguageModel(BaseTextModel):
         elif isinstance(data, str): data = {** kwargs, 'text' : data}
         elif kwargs:    data = {** kwargs, ** data}
         
-        return self.prepare_text(
-            normalize_keys(data, _alternative_keys), format = input_format, ** kwargs
-        )
+        return self.prepare_text(data, format = input_format, ** kwargs)
     
-    def filter_input(self, inputs):
-        """ Check `is_valid_tokens` for information """
-        if self.is_encoder_decoder:     inputs = inputs[0]
+    def get_inference_callbacks(self, *, post_processing = None, ** kwargs):
+        predicted, callbacks = {}, []
         
-        if not self.max_input_length:
-            return ops.all(ops.shape(inputs) > 0)
+        if post_processing is not None:
+            if not isinstance(post_processing, list): post_processing = [post_processing]
+            for fn in post_processing:
+                if callable(fn):
+                    callbacks.append(FunctionCallback(fn))
+                elif hasattr(fn, 'put'):
+                    callbacks.append(QueueCallback(fn))
         
-        return ops.logical_and(
-            ops.all(ops.shape(inputs) > 0),
-            ops.shape(inputs)[-1] <= self.max_input_length
-        )
-    
+        return predicted, callbacks
+
     def get_config(self):
         config = super().get_config()
         config.update({
