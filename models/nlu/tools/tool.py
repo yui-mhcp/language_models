@@ -17,6 +17,8 @@ from typing import Dict, Any, List, Callable, Optional, Union
 
 from ..prompts import Prompt, get_translation
 
+_globals_ignore = {'self', 'model'}
+
 @dataclass
 class Tool:
     name    : str
@@ -37,7 +39,7 @@ class Tool:
     def signature(self):
         return inspect.Signature([
             p for name, p in inspect.signature(self.function).parameters.items()
-            if name not in self.ignore
+            if name not in _globals_ignore and name not in self.ignore
         ])
     
     def __call__(self, * args, ** kwargs):

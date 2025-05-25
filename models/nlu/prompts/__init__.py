@@ -19,6 +19,7 @@ _prompts    = {
     
     'rag'   : prompts_rag,
     'answer'    : prompts_qa,
+    'expert'    : prompts_expert,
     'describe'  : prompts_description,
     'summarize' : prompts_summarization,
     'translate' : prompts_translation,
@@ -75,7 +76,7 @@ def get_prompts(task, lang = None, *, prompts = None):
         global _prompts
         prompts = _prompts
     
-    if task in prompts: prompts = prompts[task]
+    if task and task in prompts: prompts = prompts[task]
     
     return {k : get_translation(v, lang) for k, v in prompts.items()}
 

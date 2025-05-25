@@ -22,3 +22,19 @@ for module in os.listdir(__package__.replace('.', os.path.sep)):
     globals().update({
         k : v for k, v in vars(module).items() if isinstance(v, type) and issubclass(v, Tool)
     })
+
+def normalize_tools(tools):
+    if all(isinstance(tool, Tool) for tool in tools): return tools
+    
+    normalized = []
+    for tool in tools:
+        if isinstance(tool, Tool):
+            normalized.append(tool)
+        elif isinstance(tool, list):
+            normalized.extend(normalize_tools(tool))
+        elif callable(tool):
+            normalized.append(Tool.from_function(tool))
+        else:
+            raise ValueError('Unsupported tool (type {}) : {}'.format(type(tool), tool))
+    
+    return normalized

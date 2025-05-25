@@ -21,7 +21,6 @@ import importlib
 from functools import partial
 from contextlib import redirect_stdout, redirect_stderr
 
-_code_re = r'```\w*\n([\s\S]*)```'
 _orphan_re  = r'\n?[\s\S] → None\n'
 
 _dangerous_builtins = {
@@ -44,9 +43,23 @@ _safe_modules   = {
 }
 
 def extract_code(text):
-    return re.findall(_code_re, text)
+    codes = []
+    parts = re.split(r'(```[a-z]*)', text)
+    for i, part in enumerate(parts):
+        if part in ('```', '```python') and i + 2 < len(parts) and parts[i + 2] == '```':
+            codes.append(parts[i + 1])
+    return codes
 
-def execute_code(code, tools = None, globals_dict = None, allowed_modules = _safe_modules, add_traceback = False, ** kwargs):
+def execute_code(code,
+                 tools  = None,
+                 *,
+                 
+                 globals_dict   = None,
+                 add_traceback  = False,
+                 allowed_modules = _safe_modules,
+                 
+                 ** kwargs
+                ):
     try:
         parsed_ast = ast.parse(code)
         
@@ -73,11 +86,14 @@ def execute_code(code, tools = None, globals_dict = None, allowed_modules = _saf
     stdout_buffer   = io.StringIO()
     stderr_buffer   = io.StringIO()
 
+    tool_names  = [tool.name for tool in tools]
     # Exécution de chaque bloc
     with redirect_stdout(stdout_buffer), redirect_stderr(stderr_buffer):
         for block in parsed_ast.body:
             try:
-                if block in orphan_visitor:
+                if isinstance(block, ast.FunctionDef) and block.name in tool_names:
+                    continue
+                elif block in orphan_visitor:
                     # Création d'un nouveau nœud de print qui inclut l'appel à la fonction
                     """print_node = ast.Expr(
                         value = ast.Call(
@@ -130,7 +146,7 @@ def format_code_result(result):
     if not any(v for v in result.values()): return ''
     
     output = '```bash\n'
-    if result['variables']:
+    if result['variables'] and not result['stdout']:
         output += 'Variables :\n' + '\n'.join([
             '- {} : {}'.format(k, v) for k, v in result['variables'].items()
         ]) + '\n\n'

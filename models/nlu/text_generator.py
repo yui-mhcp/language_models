@@ -14,11 +14,11 @@ import logging
 import inspect
 
 from loggers import Timer, timer
-from utils.text import format_text
+from utils.text import format_text, parse_document
 from utils.callbacks import apply_callbacks
-from .prompts import add_prompt_wrapper
+from .prompts import add_prompt_wrapper, get_translation
 from .base_language_model import BaseLanguageModel
-from .tools import execute_code, extract_code, format_code_result
+from .tools import execute_code, extract_code, format_code_result, normalize_tools
 from .conversations import Chat, Conversation, Message, get_message_selector
 
 logger = logging.getLogger(__name__)
@@ -75,6 +75,7 @@ class TextGenerator(BaseLanguageModel):
               text,
               *,
               
+              prefix    = None,
               format    = None,
               
               chat  = None,
@@ -89,11 +90,12 @@ class TextGenerator(BaseLanguageModel):
               tools = None,
               max_depth = 5,
               _depth    = 0,
-              
-              possible_answers  = None,
+              allow_code_execution  = False,
               
               stop_words  = None,
               max_new_tokens  = 2048,
+              possible_answers  = None,
+              
               add_answer_start    = True,
 
               stream_text   = False,
@@ -111,7 +113,9 @@ class TextGenerator(BaseLanguageModel):
         if hasattr(stream_callback, 'build'): stream_callback.build()
         
         query = text
-        if format: text = format_text(format, text = text, ** kwargs)
+        if format:
+            if prefix: prefix = format_text(prefix, ** kwargs)
+            text = format_text(format, text = text, prefix = prefix, ** kwargs)
         
         if messages is None:
             chat, conv, messages = self.get_messages(
@@ -127,11 +131,12 @@ class TextGenerator(BaseLanguageModel):
         if _depth == 0:
             if conv is not None and _initial_conv_state is None:
                 _initial_conv_state = conv.get_state()
-        
-            if tools and self.runtime == 'trt_llm':
-                self.model.engine.logits_processor_map['tool_stopper'].tokenizer = self.tokenizer
-                if 'tool_stopper' not in kwargs.get('logits_processor_names', []):
-                    kwargs.setdefault('logits_processor_names', []).append('tool_stopper')
+            
+            if tools:
+                tools = normalize_tools(tools)
+            
+            if (tools or allow_code_execution) and self.runtime == 'trt_llm':
+                kwargs['stop_condition'] = _contains_code
         
         if possible_answers:
             kwargs['allowed_tokens'] = pad_batch(
@@ -163,6 +168,8 @@ class TextGenerator(BaseLanguageModel):
             
             max_new_tokens  = max_new_tokens,
             
+            tokenizer   = self.tokenizer,
+            
             request_id  = request_id,
             decode_fn   = self.decode_output if stream_text else None,
             stream_callback = stream_callback,
@@ -182,14 +189,12 @@ class TextGenerator(BaseLanguageModel):
         if not _abort:
             if conv is not None:
                 if text:
-                    conv.append(
-                        text, role = 'user', query = query, format = format, ** kwargs
-                    )
-                conv.append(
-                    pred, role = 'assistant', prompt = prompt
-                )
+                    conv.append(text, role = 'user', query = query, format = format, ** kwargs)
+                conv.append(pred, role = 'assistant', prompt = prompt)
             
-            if tools:
+            if tools or allow_code_execution:
+                if tools is None: tools = []
+                
                 tool_code = extract_code(pred)
                 if len(tool_code) == 1: tool_code = tool_code[0]
                 
@@ -198,7 +203,7 @@ class TextGenerator(BaseLanguageModel):
                         logger.debug('Tool call detected :\n{}'.format(tool_code))
             
                     tool_result  = execute_code(
-                        tool_code, tools = tools, conv = conv, model = self
+                        tool_code, tools = tools, chat = chat, conv = conv, model = self, ** kwargs
                     )
                     tool_message = format_code_result(tool_result)
                     if logger.isEnabledFor(logging.DEBUG):
@@ -206,10 +211,7 @@ class TextGenerator(BaseLanguageModel):
 
                     if tool_message:
                         conv.append(
-                            tool_message,
-                            role    = 'tool_result',
-                            code    = tool_code,
-                            result  = tool_result
+                            tool_message, role = 'tool_result', code = tool_code, result = tool_result
                         )
 
                         return self.infer(
@@ -227,7 +229,7 @@ class TextGenerator(BaseLanguageModel):
                             tools   = tools if _depth + 1 < max_depth else None,
                             max_depth   = max_depth,
                             _depth  = _depth + 1,
-                            _initial_message_idx    = _initial_message_idx,
+                            allow_code_execution    = allow_code_execution and _depth + 1 < max_depth,
 
                             stop_words  = None,
                             max_new_tokens  = max_new_tokens,
@@ -278,8 +280,76 @@ class TextGenerator(BaseLanguageModel):
 
     answer  = add_prompt_wrapper('answer', fn = infer)
     
+    ask_expert  = add_prompt_wrapper('expert',      fn = answer)
     translate   = add_prompt_wrapper('translate',   fn = answer)
     reformulate = add_prompt_wrapper('reformulate', fn = answer)
     describe    = add_prompt_wrapper('describe',    fn = answer)
     summarize   = add_prompt_wrapper('summarize',   fn = answer)
     extract_entities    = add_prompt_wrapper('extract_entities', fn = answer)
+    
+    @add_prompt_wrapper('rag')
+    def rag(self,
+            question,
+            *,
+            
+            k   = 10,
+            reverse = True,
+            informations    = None,
+            
+            retriever   = None,
+            retriever_config    = {},
+            
+            documents   = None,
+            search_on_web   = None,
+            search_config   = {},
+               
+            ** kwargs
+           ):
+        if search_on_web is None: search_on_web = documents is None and vectors is None
+        
+        parsed = []
+        if documents:
+            if not isinstance(documents, (list, tuple)): documents = [documents]
+            
+            for doc in documents:
+                if isinstance(doc, str):
+                    parsed.extend(parse_document(doc, ** kwargs))
+                elif isinstance(doc, dict):
+                    parsed.append(doc)
+                elif isinstance(doc, list):
+                    parsed.extend(doc)
+                else:
+                    raise ValueError('Unsupported document format : {}'.format(doc))
+        
+        if search_on_web:
+            raise NotImplementedError()
+            
+            for doc in search(question, ** kwargs)['results']:
+                parsed.extend(doc)
+        
+        if isinstance(retriever, str):
+            from models import get_pretrained
+            retriever = get_pretrained(retriever)
+
+        if not informations:                     informations = [question]
+        elif not isinstance(informations, list): informations = [informations]
+        
+        retrieved, _texts = [], set()
+        for info in informations:
+            if not isinstance(info, dict): info = {'query' : info}
+            retrieved_info = vectors.search(info['query'], k = k, reverse = reverse)
+            
+            if 'question' in info:
+                retrieved_info = [{'text' : self.answer(
+                    info['question'], documents = retrieved_info
+                )[0]}]
+            
+            for ret in retrieved_info:
+                if ret['text'] not in _texts:
+                    retrieved.append(ret)
+                    _texts.add(ret['text'])
+
+        return self.answer(question, documents = retrieved, ** kwargs)
+
+def _contains_code(text):
+    return text.rstrip().endswith('```') and '```python' in text

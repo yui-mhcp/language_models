@@ -60,11 +60,12 @@ def _split_lines(text):
     
     indexes = []
     for i, c in enumerate(text):
-        if (c in ('"' "'")) and (i == 0 or i == len(text) - 1 or not text[i-1].isalnum() or not text[i+1].isalnum()):
+        if (c == '"') and (i == 0 or i == len(text) - 1 or not text[i-1].isalnum() or not text[i+1].isalnum()):
             is_string = not is_string
         elif c == '\n' and not is_string:
             indexes.append(i)
-        
+    
+    if indexes[-1] != len(text): indexes.append(len(text))
     return [
         text[idx + 1 : indexes[i + 1]].strip('\n') for i, idx in enumerate(indexes[:-1])
     ]
