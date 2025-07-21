@@ -12,23 +12,30 @@
 from abc import ABC, abstractmethod
 
 class MessageSelector(ABC):
+    def __repr__(self):
+        return '<{}>'.format(self.__class__.__name__)
+    
+    def __call__(self, conv, ** kwargs):
+        return self.get_messages(conv, ** kwargs)
+
     @abstractmethod
     def get_messages(self, conv, *, chat = None, user = None, ** kwargs):
         """ Return a `list` of `Mesage` from the given `conv` """
-    
 
 class LastMessageSelector(MessageSelector):
     def get_messages(self, conv, *, tokenizer, max_length = None, max_messages = 5, ** kwargs):
         """ Return a `list` of `Mesage` from the given `conv` """
+        if not max_length: max_length = float('inf')
+        
         n, total_length = 0, 0
         messages = []
         for message in reversed(conv.messages):
             if message.role == 'user': n += 1
             
-            if 'length' not in message:
+            if 'length' not in message or not message['length']:
                 message['length'] = len(tokenizer.tokenize(message['content']))
             
-            if n and total_length + message['length'] > max_length:
+            if (n) and (total_length + message['length'] > max_length or n > max_messages):
                 break
             
             total_length += message['length']

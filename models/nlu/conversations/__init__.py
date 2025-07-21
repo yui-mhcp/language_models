@@ -23,3 +23,10 @@ def get_message_selector(name, ** kwargs):
         raise ValueError('Unknown message selector : {}'.format(name))
     
     return _selectors[normalized](** kwargs)
+
+def get_messages(conv, selector = 'last', ** kwargs):
+    if isinstance(selector, str):
+        selector = get_message_selector(selector)
+    
+    return selector(conv, ** kwargs)
+    

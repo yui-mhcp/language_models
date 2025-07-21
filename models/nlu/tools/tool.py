@@ -23,9 +23,10 @@ _globals_ignore = {'self', 'model'}
 class Tool:
     name    : str
     description : Union[Prompt, Dict, str]
-    function    : Callable
-    ignore      : List  = field(default_factory = list)
-    metadata    : Dict[str, Any] = field(default_factory = dict)
+    function    : Callable  = field(repr = False)
+    instructs   : List  = field(default_factory = list, repr = False)
+    ignore      : List  = field(default_factory = list, repr = False)
+    metadata    : Dict[str, Any] = field(default_factory = dict, repr = False)
     
     def __post_init__(self):
         if self.function is None:
@@ -53,6 +54,9 @@ class Tool:
             get_translation(self.description, lang).replace('\n', '\n    ').strip()
         )
 
+    def get_instructions(self, lang = 'en'):
+        return [get_translation(instruct) for instruct in self.instructions]
+    
     def to_json(self, lang = 'en'):
         return {
             "name"  : self.name,

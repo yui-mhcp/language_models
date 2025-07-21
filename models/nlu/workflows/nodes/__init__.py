@@ -9,15 +9,25 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .parser import Parser
+import os
+import importlib
 
-class TxtParser(Parser):
-    __extension__ = 'txt'
+from .node import Node
+
+_nodes = {}
+
+for module in os.listdir(__package__.replace('.', os.path.sep)):
+    if module.startswith(('.', '_')) or '_old' in module: continue
+    module = importlib.import_module(__package__ + '.' + module.replace('.py', ''))
     
-    def get_text(self, *, encoding = 'utf-8', ** kwargs):
-        with open(self.filename, 'r', encoding = encoding) as f:
-            return f.read()
+    _nodes.update({
+        k : v for k, v in vars(module).items() if isinstance(v, type) and issubclass(v, Node)
+    })
 
-    def get_paragraphs(self, *, sep = '\n\n', ** kwargs):
-        """ Extract a list of paragraphs """
-        return [{'text' : para} for para in self.get_text(** kwargs).split(sep)]
+globals().update(_nodes)
+
+def deserialize(node):
+    config = node.copy()
+    node_class = config.pop('class_name')
+    
+    return _nodes[node_class](** config)

@@ -94,9 +94,12 @@ class Conversation:
     name    : str   = field(default = None, hash = False)
     messages    : List[Message] = field(default_factory = list, hash = False, repr = False)
     pinned      : List[Message] = field(default_factory = list, hash = False, repr = False)
+    instructions    : List[Message] = field(default_factory = list, hash = False, repr = False)
     
     metadata    : Dict[str, Any] = field(default_factory = dict, hash = False, repr = False)
     system_prompt   : str = field(default = None, hash = False, repr = False)
+    
+    __state_fields__    = ('messages', 'pinned', 'instructions')
     
     @property
     def users(self):
@@ -116,7 +119,7 @@ class Conversation:
         return any(msg.id == message_id for msg in reversed(self.messages))
     
     def get_state(self):
-        return {'messages' : self.messages.copy(), 'pinned' : self.pinned.copy()}
+        return {k : self.__dict__[k].copy() for k in self.__state_fields__}
     
     def set_state(self, state):
         self.__dict__.update(state)
@@ -218,7 +221,15 @@ class Chat:
     
     def get_conv(self, conv_id = None, message_id = None, create = True, ** _):
         if conv_id:
-            return self[conv_id] if conv_id in self else None
+            if conv_id in self:
+                return self[conv_id]
+            elif create:
+                conv = Conversation(id = conv_id)
+                self.conversations.append(conv)
+                self.last_conv_id = conv.id
+                return conv
+            else:
+                return None
         elif message_id:
             return self.get_conv_from_message_id(message_id)
         elif create and self.last_conv_id is None:

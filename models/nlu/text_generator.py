@@ -10,16 +10,20 @@
 # limitations under the License.
 
 import os
+import re
 import logging
 import inspect
 
+from functools import partial
+
 from loggers import Timer, timer
-from utils.text import format_text, parse_document
+from utils.text import format_text, parse_document, search_on_web
 from utils.callbacks import apply_callbacks
+from .inference_manager import InferenceManager
 from .prompts import add_prompt_wrapper, get_translation
 from .base_language_model import BaseLanguageModel
-from .tools import execute_code, extract_code, format_code_result, normalize_tools
-from .conversations import Chat, Conversation, Message, get_message_selector
+from .tools import execute_code, extract_code, format_code_result, normalize_tools, remove_simulated_output
+from .conversations import Chat, Conversation, Message, get_message_selector, get_messages
 
 logger = logging.getLogger(__name__)
 
@@ -56,18 +60,9 @@ class TextGenerator(BaseLanguageModel):
         
         return self._chats[chat_id]
     
-    def get_conv(self, chat_id, ** kwargs):
-        chat = self.get_chat(chat_id)
-        return chat, chat.get_conv(** kwargs)
-    
-    def get_messages(self, chat_id, *, chat = None, conv = None, message_selector = 'last', ** kwargs):
-        if conv is None: chat, conv = self.get_conv(chat_id, ** kwargs)
-        if conv is None: return (None, None, [])
-        
-        selector = get_message_selector(message_selector)
-        return chat, conv, selector.get_messages(
-            conv = conv, chat = chat, tokenizer = self.tokenizer, ** kwargs
-        )
+    def get_conv(self, chat_id = 'default', chat = None, ** kwargs):
+        if chat is None: chat = self.get_chat(chat_id)
+        return chat.get_conv(** kwargs)
     
     @timer
     @add_prompt_wrapper('default')
@@ -78,18 +73,14 @@ class TextGenerator(BaseLanguageModel):
               prefix    = None,
               format    = None,
               
-              chat  = None,
               conv  = None,
-              chat_id   = 'default',
               conv_id   = None,
-              new_conv  = False,
               messages  = None,
               message_selector  = 'last',
-              max_input_length  = 4096,
+              max_input_length  = None,
               
               tools = None,
               max_depth = 5,
-              _depth    = 0,
               allow_code_execution  = False,
               
               stop_words  = None,
@@ -99,149 +90,233 @@ class TextGenerator(BaseLanguageModel):
               add_answer_start    = True,
 
               stream_text   = False,
-              stream_callback   = None,
-
               request_id    = None,
+              request_manager   = None,
+              stream_callback   = None,
               wait_finalization = False,
-              _initial_conv_state   = None,
 
               callbacks = None,
               predicted = None,
-
+              
+              _inference_manager    = None,
+              
               ** kwargs
              ):
-        if hasattr(stream_callback, 'build'): stream_callback.build()
+        """
+            Performs inference (i.e., generate LLM answer based on the given text/messages).
+            
+            Arguments :
+                - text  : the input query. If `messages` is provided, it can be `None`
+                
+                - prefix / format   : used to format `text` (only relevant if `text` is provided)
+                
+                - conv  : the `Conversation` history
+                - messages  : the messages history
+                - message_selector  : the message selection scheme (name or `MessageSelector`)
+                - max_input_length  : maximum number of input tokens
+                
+                - tools : list of tools for the model
+                - max_depth : maximum recursion depth for tool calls
+                - allow_code_execution  : whether the model can execute python code or not
+                
+                - stop_words    : a list of words that stop the inference
+                - max_new_tokens    : maximum number of tokens to generate
+                - allowed_answers   : a list of possible answers that the model can generate
+                
+                - add_answer_start  : whether to add `answer_start` in the output
+                                      `answer_start` is used to force the generation to
+                                      start by a given string
+                
+                - stream_text   : whether to pass string (decoded text) or tokens to `stream_callback`
+                - request_id    : used to identify the request for `request_manager`
+                - request_manager   : `callable` that manages the request, see below for more info
+                - stream_callback   : `callable` called at each inference step
+                - wait_finalization : whether to wait request finalization or not (see below)
+                
+                - kwargs    : forwarded to `self.get_input` and `self.model`
+            Return :
+                - output    : `dict` containing predicted text + general information
+            
+            The `inference_manager` allows to control generation, such as aborting it before the end
+            Here are the methods supported :
+                - `build()` : initialize the request manager
+                - `__call__(inference_item, request_id = None) -> bool` :
+                    Call the manager at each step, passing tokens or decoded text (cf `stream_text`) :
+                    If the returned value is `False`, the request is aborted
+                - `wait_finalization(request_id) -> bool` :
+                    only used if `wait_finalize` is True. Wait until the request is finalized.
+                    If the returned value is `False`, the request is aborted.
+                - `finalize(request_id)` :
+                    finalize the request if not aborted (called at most once per request_id)
+                - `pop(request_id)` :
+                    Pop the request from the manager. Called when the request is aborted
+        """
+        ##############################
+        #    State initialization    #
+        ##############################
+        
+        _root_call = False
+        if _inference_manager is None:
+            _root_call = True
+            
+            if max_input_length is None: max_input_length = float('inf')
+            if self.max_input_length:
+                max_input_length = min(max_input_length, self.max_input_length)
+            
+            if conv is None:
+                if messages is None:
+                    conv = self.get_conv(conv_id = conv_id, ** kwargs)
+                else:
+                    conv = Conversation(messages = [Message(** msg) for msg in messages])
+        
+            if tools:
+                tools = normalize_tools(tools)
+            else:
+                tools = []
+            
+            tool_names = ['print'] + [tool.name for tool in tools]
+            if self.runtime == 'trt_llm':
+                if tools or allow_code_execution:
+                    kwargs['stop_condition'] = partial(_contains_code, tool_names = tool_names)
+        
+                if possible_answers:
+                    kwargs['allowed_tokens'] = pad_batch(
+                        self.encode_text(
+                            possible_answers, add_sos_and_eos = False, return_type = 'np'
+                        ),
+                        pad_value = self.blank_token_idx,
+                        dtype = 'int32'
+                    )
+            elif tools or allow_code_execution or possible_answers:
+                raise NotImplementedError('The arguments `tools`, `allow_code_execution` and `possible_answers` are only supported with `TensorRT-LLM` runtime')
+
+            _inference_manager  = InferenceManager(
+                initial_state   = conv.get_state(),
+                
+                tokenizer   = self.tokenizer,
+                stream_text = stream_text,
+                
+                callback    = stream_callback,
+                request_id  = request_id,
+                request_manager = request_manager,
+                wait_finalization   = wait_finalization
+            )
+            
+            kwargs.update(_inference_manager.get_inference_config())
+        else:
+            tool_names = ['print'] + [tool.name for tool in tools]
+        
+        ####################
+        #   Prepare input  #
+        ####################
         
         query = text
         if format:
             if prefix: prefix = format_text(prefix, ** kwargs)
             text = format_text(format, text = text, prefix = prefix, ** kwargs)
-        
-        if messages is None:
-            chat, conv, messages = self.get_messages(
-                conv    = conv,
-                chat_id = chat_id,
-                conv_id = conv_id,
-                new_conv    = new_conv,
-                max_length  = max_input_length,
-                message_selector    = message_selector,
-                ** kwargs
-            )
-        
-        if _depth == 0:
-            if conv is not None and _initial_conv_state is None:
-                _initial_conv_state = conv.get_state()
-            
-            if tools:
-                tools = normalize_tools(tools)
-            
-            if (tools or allow_code_execution) and self.runtime == 'trt_llm':
-                kwargs['stop_condition'] = _contains_code
-        
-        if possible_answers:
-            kwargs['allowed_tokens'] = pad_batch(
-                self.encode_text(
-                    possible_answers, add_sos_and_eos = False, return_type = 'np'
-                ),
-                pad_value = self.blank_token_idx,
-                dtype = 'int32'
-            )
 
+        messages    = get_messages(
+            conv,
+            message_selector,
+            max_length  = max_input_length,
+            tokenizer   = self.tokenizer,
+            ** kwargs
+        )
+        
         prompt, tokens = self.get_input(
             text,
             messages    = messages,
-            pinned_messages = conv.pinned if conv is not None else [],
+            instructions    = conv.instructions,
+            pinned_messages = conv.pinned,
             python_tools    = tools,
+            allow_code_execution    = allow_code_execution,
 
             max_length  = max_input_length,
-            return_text     = True,
+            return_text = True,
             
             ** kwargs
         )
         
-        if hasattr(stream_callback, 'is_stopped') and stream_callback.is_stopped(request_id):
-            if _depth == 0: stream_callback.pop(request_id)
+        if _inference_manager.is_aborted():
             return {}
         
-        out = self.compiled_infer(
-            tokens[None],
-            
-            max_new_tokens  = max_new_tokens,
-            
-            tokenizer   = self.tokenizer,
-            
-            request_id  = request_id,
-            decode_fn   = self.decode_output if stream_text else None,
-            stream_callback = stream_callback,
-            
-            ** kwargs
-        )
+        ####################
+        #     Inference    #
+        ####################
         
+        out = self.compiled_infer(
+            tokens[None], max_new_tokens = max_new_tokens, tokenizer = self.tokenizer, ** kwargs
+        )
+        if self.runtime == 'trt_llm':
+            _inference_manager.set_inference_stream(out)
+            out = _inference_manager.result()
+        
+        if _inference_manager.is_aborted():
+            return {}
+
         pred = self.decode_output(out)[0]
         if isinstance(pred, list) and len(pred) == 1: pred = pred[0]
         if add_answer_start and kwargs.get('answer_start', None):
             pred = kwargs['answer_start'] + pred
 
-        _abort = (
-            hasattr(stream_callback, 'is_stopped') and stream_callback.is_stopped(request_id)
-        )
+        code_block = None
+        if tools or allow_code_execution:
+            if 'print' in pred:
+                pred = remove_simulated_output(pred)
 
-        if not _abort:
-            if conv is not None:
-                if text:
-                    conv.append(text, role = 'user', query = query, format = format, ** kwargs)
-                conv.append(pred, role = 'assistant', prompt = prompt)
-            
-            if tools or allow_code_execution:
-                if tools is None: tools = []
+            _, code_block = extract_code(pred)
+            if code_block: code_block = code_block[0]
+
+        _inference_manager.append(pred)
+        
+        if text:
+            conv.append(text, role = 'user', query = query, format = format, ** kwargs)
+        conv.append(pred, role = 'assistant', prompt = prompt)
+
+        if code_block and _contains_tool(code_block, tool_names):
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug('Tool call detected :\n{}'.format(code_block))
+
+            code_result  = execute_code(
+                code_block, tools = tools, conv = conv, model = self, ** kwargs
+            )
+            tool_message = format_code_result(code_result)
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug('Code execution result : {}'.format(tool_message))
+
+            if tool_message:
+                conv.append(
+                    tool_message, role = 'code', code = code_block, result = code_result
+                )
+
+                if len(_inference_manager) >= max_depth:
+                    tools   = []
+                    allow_code_execution    = False
                 
-                tool_code = extract_code(pred)
-                if len(tool_code) == 1: tool_code = tool_code[0]
-                
-                if tool_code and 'print(' in tool_code or any(tool.name + '(' in tool_code for tool in tools):
-                    if logger.isEnabledFor(logging.DEBUG):
-                        logger.debug('Tool call detected :\n{}'.format(tool_code))
-            
-                    tool_result  = execute_code(
-                        tool_code, tools = tools, chat = chat, conv = conv, model = self, ** kwargs
-                    )
-                    tool_message = format_code_result(tool_result)
-                    if logger.isEnabledFor(logging.DEBUG):
-                        logger.debug('Tools call result : {}'.format(tool_message))
+                return self.infer(
+                    None,
+                    conv    = conv,
+                    message_selector    = message_selector,
+                    max_input_length    = max_input_length,
 
-                    if tool_message:
-                        conv.append(
-                            tool_message, role = 'tool_result', code = tool_code, result = tool_result
-                        )
+                    tools   = tools,
+                    max_depth   = max_depth,
+                    allow_code_execution    = allow_code_execution,
 
-                        return self.infer(
-                            None,
-                            chat    = chat,
-                            conv    = conv,
-                            message_selector    = message_selector,
-                            max_input_length    = max_input_length,
+                    max_new_tokens  = max_new_tokens,
+                    add_answer_start    = add_answer_start,
 
-                            request_id  = request_id,
-                            stream_text = stream_text,
-                            stream_callback = stream_callback,
-                            _initial_conv_state = _initial_conv_state,
+                    _inference_manager  = _inference_manager,
+                    
+                    _add_prompts    = False,
 
-                            tools   = tools if _depth + 1 < max_depth else None,
-                            max_depth   = max_depth,
-                            _depth  = _depth + 1,
-                            allow_code_execution    = allow_code_execution and _depth + 1 < max_depth,
+                    ** kwargs
+                )
 
-                            stop_words  = None,
-                            max_new_tokens  = max_new_tokens,
-                            add_answer_start    = add_answer_start,
-
-                            _add_prompts    = False,
-
-                            ** kwargs
-                        )
-
+        full_output = _inference_manager.cumulated_results()
+        full_output = full_output[0] if len(full_output) == 1 else '\n\n'.join(full_output)
         result = {
-            'predicted' : pred,
+            'predicted' : full_output,
             
             'query' : query,
             'format'    : format,
@@ -250,31 +325,12 @@ class TextGenerator(BaseLanguageModel):
             ** kwargs
         }
 
-        if _depth > 0: return result
-        
-        if stream_callback is not None:
-            if request_id is not None:
-                if wait_finalization:
-                    _abort = not stream_callback.wait_finalize(request_id)
-
-                stream_callback((request_id, inspect._empty))
-                stream_callback({'id' : request_id, 'type' : 'status', 'content' : 'finished'})
-
-            else:
-                if not callable(stream_callback): stream_callback = stream_callback.put
-                stream_callback(inspect._empty)
-
-        if _abort and _initial_conv_state is not None:
-            logger.info('Resetting conv to its initial state')
-            conv.set_state(_initial_conv_state)
-
-        if callbacks:
+        if not _root_call:
+            return result
+        elif not _inference_manager.finalize():
+            return result
+        elif callbacks:
             apply_callbacks(callbacks, {}, result, save = False)
-
-        if request_id is not None:
-            logger.info('Request {} {} !'.format(
-                request_id, 'finished' if not _abort else 'aborted'
-            ))
         
         return result
 
@@ -290,66 +346,58 @@ class TextGenerator(BaseLanguageModel):
     @add_prompt_wrapper('rag')
     def rag(self,
             question,
+            queries = None,
             *,
             
             k   = 10,
             reverse = True,
-            informations    = None,
+            
+            paragraphs  = None,
+            documents   = None,
+            web_search  = None,
+            search_config   = {},
             
             retriever   = None,
             retriever_config    = {},
             
-            documents   = None,
-            search_on_web   = None,
-            search_config   = {},
-               
             ** kwargs
            ):
-        if search_on_web is None: search_on_web = documents is None and vectors is None
+        assert paragraphs or documents or web_search
         
-        parsed = []
-        if documents:
-            if not isinstance(documents, (list, tuple)): documents = [documents]
-            
-            for doc in documents:
-                if isinstance(doc, str):
-                    parsed.extend(parse_document(doc, ** kwargs))
-                elif isinstance(doc, dict):
-                    parsed.append(doc)
-                elif isinstance(doc, list):
-                    parsed.extend(doc)
-                else:
-                    raise ValueError('Unsupported document format : {}'.format(doc))
+        if queries is None:             queries = [question]
+        elif isinstance(queries, str):  queries = [queries]
         
-        if search_on_web:
-            raise NotImplementedError()
-            
-            for doc in search(question, ** kwargs)['results']:
-                parsed.extend(doc)
+        if paragraphs is None:                  paragraphs = []
+        elif hasattr(paragraphs, 'to_dict'):    paragraphs = paragraphs.to_dict('records')
+        else:                                   paragraphs = paragraphs.copy()
+        
+        if web_search:
+            for para in search_on_web(question, ** kwargs)['results'].values():
+                paragraphs.extend(para)
         
         if isinstance(retriever, str):
             from models import get_pretrained
             retriever = get_pretrained(retriever)
-
-        if not informations:                     informations = [question]
-        elif not isinstance(informations, list): informations = [informations]
         
-        retrieved, _texts = [], set()
-        for info in informations:
-            if not isinstance(info, dict): info = {'query' : info}
-            retrieved_info = vectors.search(info['query'], k = k, reverse = reverse)
-            
-            if 'question' in info:
-                retrieved_info = [{'text' : self.answer(
-                    info['question'], documents = retrieved_info
-                )[0]}]
-            
-            for ret in retrieved_info:
-                if ret['text'] not in _texts:
-                    retrieved.append(ret)
-                    _texts.add(ret['text'])
+        database    = retriever.predict(
+            paragraphs, documents = documents, ** {** kwargs, ** retriever_config}
+        )
+        retrieved = retriever.retrieve(queries, database, k = k, reverse = reverse)
 
-        return self.answer(question, documents = retrieved, ** kwargs)
+        if len(retrieved) > 1:
+            infos = []
+            for res in retrieved: infos.extend(res)
+            infos = sorted(infos, key = lambda p: p['score'], reverse = not reverse)
+        else:
+            infos = retrieved[0]
+        
+        return self.answer(question, paragraphs = infos, ** kwargs)
 
-def _contains_code(text):
-    return text.rstrip().endswith('```') and '```python' in text
+def _contains_tool(text, tool_names):
+    return any(name + '(' in text for name in tool_names)
+
+def _contains_code(text, tool_names = []):
+    if text.rstrip().endswith('```') and '```python' in text:
+        return _contains_tool(text, tool_names)
+    else:
+        return False

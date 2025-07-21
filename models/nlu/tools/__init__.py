@@ -13,7 +13,7 @@ import os
 import importlib
 
 from .tool import Tool
-from .tool_executor import execute_code, extract_code, format_code_result
+from .tool_executor import execute_code, extract_code, format_code_result, remove_simulated_output
 
 for module in os.listdir(__package__.replace('.', os.path.sep)):
     if module.startswith(('.', '_')) or '_old' in module: continue

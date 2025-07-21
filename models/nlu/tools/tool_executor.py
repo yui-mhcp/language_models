@@ -43,13 +43,44 @@ _safe_modules   = {
 }
 
 def extract_code(text):
-    codes = []
+    """
+        Extract text and python code parts from `text`
+        
+        Arguments :
+            - text  : (str), the text to extract code from
+        Return :
+            - raw_text  : text that is not a code block
+            - codes     : a list of all code blocks detected
+        
+        A code block is delimited by :
+        ```python
+        [... code ...]
+        ```
+    """
     parts = re.split(r'(```[a-z]*)', text)
-    for i, part in enumerate(parts):
+    
+    i, texts, codes = 0, [], []
+    while i < len(parts):
+        part = parts[i]
         if part in ('```', '```python') and i + 2 < len(parts) and parts[i + 2] == '```':
             codes.append(parts[i + 1])
-    return codes
+            i += 3
+        else:
+            texts.append(part)
+            i += 1
+    
+    return ''.join(texts), codes
 
+def remove_simulated_output(text):
+    lines = []
+    for line in text.split('\n'):
+        if '#' in line and line.strip().startswith('print('):
+            line, _, _ = line.rpartition('#')
+        
+        lines.append(line)
+    
+    return '\n'.join(lines)
+    
 def execute_code(code,
                  tools  = None,
                  *,
@@ -73,7 +104,8 @@ def execute_code(code,
                 'stderr'    : "⚠️ Unsafe code detected ⚠️\n{}".format(security_visitor)
             }
         
-        orphan_visitor = FunctionCallVisitor(code.splitlines())
+        code_lines = code.splitlines()
+        orphan_visitor = FunctionCallVisitor(code_lines)
         orphan_visitor.visit(parsed_ast)
     except SyntaxError as e:
         return {'variables' : {}, 'stdout' : '', 'stderr' : str(e)}
@@ -91,26 +123,12 @@ def execute_code(code,
     with redirect_stdout(stdout_buffer), redirect_stderr(stderr_buffer):
         for block in parsed_ast.body:
             try:
+                code = '\n'.join([
+                    line.rstrip() for line in code_lines[block.lineno - 1 : block.end_lineno]
+                ]).strip()
                 if isinstance(block, ast.FunctionDef) and block.name in tool_names:
                     continue
                 elif block in orphan_visitor:
-                    # Création d'un nouveau nœud de print qui inclut l'appel à la fonction
-                    """print_node = ast.Expr(
-                        value = ast.Call(
-                            func = ast.Name(id = 'print', ctx = ast.Load()),
-                            args = [
-                                ast.JoinedStr(
-                                    values = [
-                                        ast.Constant(value = f"{orphan_visitor[block]} → "),
-                                        ast.FormattedValue(value = block.value, conversion = -1)
-                                    ]
-                                )
-                            ]
-                        )
-                    )
-                    ast.fix_missing_locations(print_node)
-
-                    block = print_node"""
                     compiled_block = """
                     _tmp = [code]\nif _tmp is not None: print(f'[code] → {_tmp}')
                     """.replace('[code]', orphan_visitor[block].replace("'", r"\'")).strip()
@@ -121,7 +139,10 @@ def execute_code(code,
                         mode    = "exec"
                     )
                 
+                if code.startswith('print(') and ('format' not in code or code[7] != 'f'):
+                    print(code.strip() + ' # ', end = '')
                 exec(compiled_block, safe_globals, locals_dict)
+                
                 safe_globals.update({
                     k : locals_dict.pop(k) for k, v in list(locals_dict.items()) if inspect.ismodule(v)
                 })
@@ -129,7 +150,7 @@ def execute_code(code,
             except Exception as e:
                 print('{} : {}'.format(e.__class__.__name__, e), file = stderr_buffer)
                 if add_traceback: traceback.print_exc(file = stderr_buffer)
-                raise e
+                #raise e
     
     cleaned_vars = {
         k: v for k, v in locals_dict.items() 
@@ -145,20 +166,18 @@ def execute_code(code,
 def format_code_result(result):
     if not any(v for v in result.values()): return ''
     
-    output = '```bash\n'
+    output = ''
     if result['variables'] and not result['stdout']:
         output += 'Variables :\n' + '\n'.join([
             '- {} : {}'.format(k, v) for k, v in result['variables'].items()
         ]) + '\n\n'
     
     if result['stdout']:
-        output += 'stdout :\n{}'.format(result['stdout'])
+        output += 'Stdout :\n```bash\n{}\n```'.format(result['stdout'])
         if result['stderr']: output += '\n\n'
     
     if result['stderr']:
-        output += 'stderr :\n{}'.format(result['stderr'])
-    
-    output += '```'
+        output += 'Stderr :\n```bash\n{}\n```'.format(result['stderr'])
     
     return output
 
