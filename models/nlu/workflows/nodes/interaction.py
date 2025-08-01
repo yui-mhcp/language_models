@@ -12,16 +12,19 @@
 from .node import Node
 
 class PrintNode(Node):
-    def __init__(self, key, ** kwargs):
+    def __init__(self, source_key, ** kwargs):
         super().__init__(** kwargs)
-        self.key = key
+        self.source_key = source_key
+    
+    def __str__(self):
+        return super().__str__() + '- Input key : {}'.format(self.source_key)
     
     def run(self, context):
-        print(context[self.key])
+        print(context[self.source_key])
         return None
     
     def get_config(self):
-        return {** super().get_config(), 'key' : self.key}
+        return {** super().get_config(), 'source_key' : self.source_key}
 
 class CLINode(Node):
     def __init__(self, prompt = '', ** kwargs):

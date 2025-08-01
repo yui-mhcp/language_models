@@ -9,25 +9,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import os
-import importlib
+from .function import FunctionNode
 
-from .node import Node
-
-_nodes = {}
-
-for module in os.listdir(__package__.replace('.', os.path.sep)):
-    if module.startswith(('.', '_')) or '_old' in module: continue
-    module = importlib.import_module(__package__ + '.' + module.replace('.py', ''))
-    
-    _nodes.update({
-        k : v for k, v in vars(module).items() if isinstance(v, type) and issubclass(v, Node)
-    })
-
-globals().update(_nodes)
-
-def deserialize(node):
-    config = node.copy()
-    node_class = config.pop('class_name')
-    
-    return _nodes[node_class](** config)
+class DocumentNode(FunctionNode):
+    def __init__(self, source_key, ** kwargs):
+        from utils.text.parsers import parse_document
+        super().__init__(parse_document, source_key = source_key, ** kwargs)

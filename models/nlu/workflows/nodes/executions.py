@@ -9,16 +9,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from multiprocessing import cpu_count
-from multiprocessing.pool import ThreadPool
-
-from .node import NodeWrapper
+from .node import NodeManager, NodeWrapper
 
 class SequentialExecution(NodeWrapper):
-    def run(self, context):
+    def run(self, context, ** kwargs):
         res = None
         for node in self.nodes:
-            res = node(context)
+            if self.is_stopped(): return res
+            res = node(context, ** kwargs)
         return res
 
     def plot_node(self, graph, node_id, *, shape = 'box', label = None):
@@ -48,16 +46,12 @@ class SequentialExecution(NodeWrapper):
 Graph = SequentialExecution
 
 class ParallelExecution(NodeWrapper):
-    def run(self, context):
+    def run(self, context, ** kwargs):
         if len(self.nodes) == 1:
-            return [self.nodes[0](context)]
+            return [self.nodes[0](context, ** kwargs)]
         
-        with ThreadPool(min(cpu_count(), len(self.nodes))) as pool:
-            results = [
-                pool.apply_async(node, (context, ))
-                for node in self.nodes
-            ]
-            return [res.get() for res in results]
+        results = [NodeManager.run_async(node, context.copy(), ** kwargs) for node in self.nodes]
+        return [res.get() for res in results]
 
     def plot_node(self, graph, node_id, *, shape = 'box', label = None):
         self_init, next_id = super().plot_node(graph, node_id, label = "Parallel execution")

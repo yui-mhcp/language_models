@@ -13,6 +13,7 @@ import time
 import logging
 import inspect
 
+from loggers import timer
 from utils import time_to_string
 
 logger = logging.getLogger(__name__)
@@ -85,7 +86,7 @@ class InferenceManager:
     def set_inference_stream(self, stream, /):
         self.stream = stream
         
-        if self._streaming: self.start_iteration()
+        if self._streaming: self.start_stream()
     
     def abort(self):
         if self._aborted: return
@@ -101,9 +102,16 @@ class InferenceManager:
             self.request_manager.pop(self.request_id)
     
     def is_aborted(self):
-        return self._aborted
+        if self._aborted:
+            return True
+        elif hasattr(self.request_manager, 'is_aborted')and self.request_manager.is_aborted(self.request_id):
+            self.abort()
+            return True
+        else:
+            return False
 
-    def start_iteration(self):
+    @timer
+    def start_stream(self):
         if self.is_aborted() and not self.stream.is_aborted():
             self.stream.abort()
             return
@@ -119,6 +127,10 @@ class InferenceManager:
             if self.request_manager is not None:
                 if self.request_manager(out, request_id = self.request_id) is False:
                     self.abort()
+                    if logger.isEnabledFor(logging.INFO):
+                        logger.info('[LLM] Inference interrupted after {}'.format(
+                            time_to_string(time.time() - t0)
+                        ))
                     return
                 
             if self.callback is not None:
@@ -126,14 +138,14 @@ class InferenceManager:
             
             if i == 0 and logger.isEnabledFor(logging.INFO):
                 t1 = time.time()
-                logger.info('[TRT-LLM] Time-to-first token : {}'.format(
+                logger.info('[LLM] Time-to-first token : {}'.format(
                     time_to_string(t1 - t0)
                 ))
 
         if logger.isEnabledFor(logging.INFO):
             t1 = time.time()
             n  = sum(sum(len(beam) for beam in beams) for beams in tokens)
-            logger.info('[TRT-LLM] {} tokens generated in {} ({:.3f} tokens/sec)'.format(
+            logger.info('[LLM] {} tokens generated in {} ({:.3f} tokens/sec)'.format(
                 n, time_to_string(t1 - t0), n / (t1 - t0)
             ))
 

@@ -40,9 +40,13 @@ class LoopNode(Node):
         if not isinstance(self.body, Node):
             self.body = NodeManager.get(self.body)
 
+    @property
+    def nested_nodes(self):
+        return [self.cond, self.body]
+    
     def run(self, context):
         res, iteration = None, 0
-        while self.cond(context) and iteration < self.max_iter:
+        while self.cond(context) and iteration < self.max_iter and not self.is_stopped():
             res = self.body(context)
             iteration += 1
             

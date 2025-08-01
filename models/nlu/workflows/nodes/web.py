@@ -11,9 +11,6 @@
 
 from .node import Node
 
-from utils.text.web import search_on_web, process_urls
-from utils.text.parsers.html_parser import get_link
-
 class WebNode(Node):
     def __init__(self, source_key, ** kwargs):
         super().__init__(** kwargs)
@@ -23,9 +20,12 @@ class WebNode(Node):
         return super().__str__() + "- Input key : {}\n".format(self.source_key)
     
     def run(self, context):
-        return self._run(** context[self.source_key])
+        return self._make_search(** context[self.source_key])
     
-    def _run(self, *, url = None, query = None, link_id = None, n = 5):
+    def _make_search(self, *, url = None, query = None, link_id = None, n = 5):
+        from utils.text.web import search_on_web, process_urls
+        from utils.text.parsers.html_parser import get_link
+        
         urls = []
         if url:                 urls.append(url)
         if link_id is not None: urls.append(get_link(link_id))

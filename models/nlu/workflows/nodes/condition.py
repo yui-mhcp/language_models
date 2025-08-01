@@ -36,13 +36,17 @@ class BranchingNode(Node):
             if not isinstance(node, Node):
                 self.branches[k] = NodeManager.get(node)
     
-    def run(self, context):
-        value = self.condition(context)
+    @property
+    def nested_nodes(self):
+        return [self.condition] + list(self.branches.values())
+    
+    def run(self, context, ** kwargs):
+        value = self.condition(context, ** kwargs)
 
         if value in self.branches:
-            return self.branches[value](context)
+            return self.branches[value](context, ** kwargs)
         elif 'default' in self.branches:
-            return self.branches['default'](context)
+            return self.branches['default'](context, ** kwargs)
         else:
             return None
     
@@ -88,15 +92,20 @@ class ConditionNode(Node):
         
         if self.false_node is not None and not isinstance(self.false_node, Node):
             self.false_node = NodeManager.get(self.false_node)
-        
     
-    def run(self, context):
-        value = self.condition(context)
+    @property
+    def nested_nodes(self):
+        return [self.condition, self.true_node] + ([] if self.false_node is None else [self.false_node])
 
-        if self.condition(context):
-            return self.true_node(context)
+    def run(self, context, ** kwargs):
+        value = self.condition(context, ** kwargs)
+
+        if self.is_stopped():
+            return None
+        elif value:
+            return self.true_node(context, ** kwargs)
         elif self.false_node is not None:
-            return self.false_node(context)
+            return self.false_node(context, ** kwargs)
         else:
             return None
     

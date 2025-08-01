@@ -9,10 +9,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from multiprocessing import cpu_count
-from multiprocessing.pool import ThreadPool
-
-from .node import Node
+from .node import NodeManager, Node
 
 class IteratorNode(Node):
     def __init__(self, body, iterable, item_key, ** kwargs):
@@ -46,6 +43,10 @@ class IteratorNode(Node):
         if not isinstance(self.body, Node):
             self.body = NodeManager.get(self.body)
     
+    @property
+    def nested_nodes(self):
+        return [self.iterable, self.body]
+        
     def plot_node(self, graph, node_id, *, shape = 'box', label = None):
         if not self.built: self.build()
         
@@ -80,35 +81,39 @@ class IteratorNode(Node):
         }
 
 class SequentialIteratorNode(IteratorNode):
-    def run(self, context):
+    def run(self, context, ** kwargs):
         res = None
-        for item in self.iterable(context):
+        for item in self.iterable(context, ** kwargs):
+            if self.is_stopped(): return res
+            
             context[self.item_key] = item
-            context, res = self.body(context)
+            res = self.body(context, ** kwargs)
         
         return res
 
 class ParallelIteratorNode(IteratorNode):
-    def run(self, context):
-        iterable = self.iterable(context)
+    def run(self, context, ** kwargs):
+        iterable = self.iterable(context, ** kwargs)
         
-        if len(iterable) == 0:
+        if self.is_stopped() or len(iterable) == 0:
             return []
         elif len(iterable) == 1:
             context[self.item_key] = iterable[0]
-            return [self.body(context)]
+            return [self.body(context, ** kwargs)]
         
-        with ThreadPool(min(cpu_count(), len(iterable))) as pool:
-            outputs = [
-                pool.apply_async(self.body.start, ({** context, self.item_key : item}, ))
-                for item in iterable
-            ]
-            outputs = [out.get() for out in outputs]
+        # This ensures that `body.build()` is only called once
+        if not self.body.built: self.body.build()
         
-        results = []
-        for ctx, res in outputs:
-            context.update(ctx)
-            results.append(res)
-        
-        return results
+        # The "request_manager" argument is used to control `LLMNode` inferences
+        # As the `LLMNode` (body) is called multiple times, it is necessary to
+        # pass a unique `request_manager` that will stop all parallel inferences
+        # Indeed, simply calling `self.body.abort` cannot guarantee that **all**
+        # inferences will be stopped.
+        outputs = [
+            NodeManager.run_async(
+                self.body, {** context, self.item_key : item}, _stopper = self.is_stopped
+            )
+            for item in iterable
+        ]
+        return [out.get() for out in outputs]
         

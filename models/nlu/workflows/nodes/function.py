@@ -53,7 +53,9 @@ class FunctionNode(Node):
                 self.func = getattr(importlib.import_module(module), name)
     
     def run(self, context):
-        return self.func(context if not  self.source_key else context[self.source_key])
+        return self.func(
+            context if not  self.source_key else context[self.source_key], ** self.kwargs
+        )
     
     def get_config(self):
         return {

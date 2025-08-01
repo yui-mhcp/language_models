@@ -21,43 +21,57 @@ class LLMNode(Node):
                  source_key = None,
                  keep_history   = True,
                  
-                 name   = None,
-                 output_key = None,
-                 
                  ** kwargs
                 ):
-        super().__init__(name = name, output_key = output_key)
+        super().__init__(** kwargs)
         
         self.model  = model
         self.method = method
-        self.kwargs = kwargs
         self.mapping    = mapping
         self.source_key = source_key
         self.keep_history   = keep_history
     
+    def build(self):
+        super().build()
+        
+        self.request_manager = RequestManager(self)
+    
     def __str__(self):
         des = super().__str__()
         if self.source_key: des += "- Input key : {}\n".format(self.source_key)
-        des += "- Model ({}) : {}\n".format(self.method, getattr(self.model, 'name', self.model))
+        des += "- Model  : {}\n".format(getattr(self.model, 'name', self.model))
+        des += "- Method : {}\n".format(self.method)
         
         return des
     
-    def run(self, context):
+    def run(self, context, ** kwargs):
+        if isinstance(self.model, str):
+            from models import get_pretrained
+            
+            self.model = get_pretrained(model)
+
         if self.source_key:
             if isinstance(context[self.source_key], dict):
                 args, kwargs = (), {** self.kwargs, ** context[self.source_key]}
             else:
                 args, kwargs = (context[self.source_key], ), self.kwargs.copy()
                 if self.mapping:
-                    kwargs.update({k : context[v] for k, v in self.mapping.items() if v in context})
+                    kwargs.update({
+                        key : context[ctx_key] for ctx_key, key in self.mapping.items()
+                        if ctx_key in context
+                    })
         else:
             args, kwargs = (), {** self.kwargs, ** context}
         
-        kwargs.update({
-            'chat_id' : context['__graph__'].name,
-            'conv_id' : self.name if self.keep_history else None,
-            'new_conv'  : not self.keep_history
-        })
+        if self.keep_history:
+            kwargs['conv_id'] = self.name
+        else:
+            kwargs['messages'] = []
+        
+        if 'request_manager' in kwargs:
+            raise NotImplementedError('The `request_manager` is currently not supported')
+        
+        kwargs['request_manager'] = self.request_manager
         
         return getattr(self.model, self.method)(* args, ** kwargs)['predicted']
     
@@ -68,11 +82,19 @@ class LLMNode(Node):
             'method'    : self.method,
             'mapping'   : self.mapping,
             'source_key'    : self.source_key,
-            'keep_history'  : self.keep_history,
-            ** kwargs
+            'keep_history'  : self.keep_history
         }
 
 class TranslationNode(LLMNode):
     def __init__(self, model, *, method = 'translate', ** kwargs):
         super().__init__(model, method = method, add_answer_start = False, ** kwargs)
+
+class RequestManager:
+    def __init__(self, node):
+        self.node = node
     
+    def is_aborted(self, request_id = None):
+        return self.node.is_stopped()
+    
+    def __call__(self, item, request_id = None):
+        return not self.is_aborted()

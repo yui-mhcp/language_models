@@ -102,16 +102,14 @@ prompts_default    = {
                         {%- endif -%}
                     {%- endif -%}
 
-                    {%- if 'page' in para -%}
+                    {%- if 'page' in para and (loop.index == 1 or para.page != paragraphs[loop.index - 2].page)  -%}
                         {{- "- Page #" + para.page|string + "\n" -}}
                     {%- endif -%}
                     {%- if 'section' in para and para.section %}
                         {{- "- Section : " + para.section[-1] + "\n" }}
                     {%- endif -%}
                     
-                    {%- if para.type == 'text' -%}
-                        {{- para.text.strip("\n") -}}
-                    {%- elif para.type == 'code' -%}
+                    {%- if para.type == 'code' -%}
                         {{- "```" + para.language or "text" + "\n" + para.text + "\n```" -}}
                     {%- elif para.type == 'list' -%}
                         {%- for item in para['items'] -%}
@@ -121,6 +119,8 @@ prompts_default    = {
                         {%- for row in para.rows -%}
                             {{- "\n- " + row|string }}
                         {%- endfor -%}
+                    {%- elif 'text' in para -%}
+                        {{- para.text.strip("\n") -}}
                     {%- endif -%}
                 {%- endfor -%}
             {% endif %}

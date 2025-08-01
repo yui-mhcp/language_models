@@ -240,6 +240,9 @@ class TextGenerator(BaseLanguageModel):
         if _inference_manager.is_aborted():
             return {}
         
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug('Input prompt :\n{}'.format(prompt))
+
         ####################
         #     Inference    #
         ####################

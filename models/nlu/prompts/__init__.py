@@ -9,23 +9,26 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
+import glob
+import importlib
+
 from functools import wraps
 
 from .task_prompts import *
 from .base_prompt import Prompt, get_translation
 
-_prompts    = {
-    'default'   : prompts_default,
+_prompts = {}
+for file in glob.glob(os.path.join(* __package__.split('.'), 'prompts_*.py')):
+    module = importlib.import_module(file.replace(os.path.sep, '.')[:-3])
     
-    'rag'   : prompts_rag,
-    'answer'    : prompts_qa,
-    'expert'    : prompts_expert,
-    'describe'  : prompts_description,
-    'summarize' : prompts_summarization,
-    'translate' : prompts_translation,
-    'reformulate'   : prompts_reformulation,
-    'extract_entities'  : prompts_entity_extraction
-}
+    lang = file[:-3].split('_')[-1]
+    for k, v in vars(module).items():
+        if k.startswith('prompts_'):
+            task = k[8:]
+            for ki, vi in v.items():
+                _prompts.setdefault(task, {}).setdefault(ki, {}).update({lang : vi})
+
 
 def add_prompt_wrapper(_task, /, *, fn = None):
     def wrapper(fn):
@@ -75,8 +78,9 @@ def get_prompts(task, lang = None, *, prompts = None):
     if prompts is None:
         global _prompts
         prompts = _prompts
-    
-    if task and task in prompts: prompts = prompts[task]
+        
+        if task not in prompts: return {}
+        prompts = prompts[task]
     
     return {k : get_translation(v, lang) for k, v in prompts.items()}
 

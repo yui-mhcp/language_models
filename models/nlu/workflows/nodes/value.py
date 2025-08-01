@@ -26,16 +26,16 @@ class ValueNode(Node):
         return {** super().get_config(), 'value' : self.value}
     
 class ContextValueNode(Node):
-    def __init__(self, key, ** kwargs):
+    def __init__(self, source_key, ** kwargs):
         super().__init__(** kwargs)
-        self.key = key
+        self.source_key = source_key
     
     def __str__(self):
-        return super().__str__() + "- Key : {}\n".format(self.key)
+        return super().__str__() + "- Key : {}\n".format(self.source_key)
 
     def run(self, context):
-        return context[self.key]
+        return context[self.source_key]
     
     def get_config(self):
-        return {** super().get_config(), 'key' : self.key}
+        return {** super().get_config(), 'source_key' : self.source_key}
     
