@@ -9,141 +9,28 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .base_prompt import dedent
+from .prompt import dedent
 
-prompts_default    = {
-    'personnality_prompt'   : (
-        "Tu es un assistant IA. Tu dois répondre du mieux possible aux demandes de l'utilisateur."
-    ),
+_default_formats    = {
     'system_prompt' : dedent("""
-        {%- if not lang -%}
-            {% set lang = 'fr' -%}
+        {%- if personnality -%}
+            {{- personnality + "\n\n" -}}
         {%- endif -%}
 
-        {%- if prompt_format == 'markdown' -%}
-            {{- "## Personnalité\n\n" -}}
-        {%- elif prompt_format == 'html' -%}
-            {{- "<personnalité>\n" -}}
+        {%- if python_tools -%}
+            {{- python_tools + "\n\n" -}}
+        {%- endif -%}
+        
+        {%- if paragraphs and not paragraphs_in_last_message -%}
+            {{- paragraphs + "\n\n" -}}
         {%- endif -%}
 
-        {{- personnality_prompt -}}
-
-        {%- if prompt_format == 'html' -%}
-            {{- "\n</personnalité>" -}}
+        {%- if memories -%}
+            {{- memories + "\n\n" -}}
         {%- endif -%}
-
-        {%- if is_vocal -%}
-            {%- if prompt_format == 'markdown' -%}
-                {{- "\n\n## Style de réponse" -}}
-            {%- elif prompt_format == 'html' -%}
-                {{- "\n\n<style>" -}}
-            {%- endif -%}
-
-            {{- "\n\nTu es actuellement dans un appel vocal. Réponds de manière adaptée pour que ta réponse soit fluide et agréable à écouter. Privilégie les réponses courtes et directes.\n" -}}
-            {{- "**ATTENTION** : les messages de l'utilisateur peuvent contenir des erreurs de transcription / d'orthographe. Essaye d'interpréter quand c'est possible, et sinon, demande de répéter." -}}
-
-            {%- if prompt_format == 'html' -%}
-                {{- "\n</style>" -}}
-            {%- endif -%}
-        {%- endif -%}
-
-        {%- if python_tools or allow_code_execution -%}
-            {%- if prompt_format == 'markdown' -%}
-                {{- "\n\n## Environnement ipython" -}}
-            {%- elif prompt_format == 'html' -%}
-                {{- "\n\n<ipython>" -}}
-            {%- endif -%}
-
-            {{- "\n\nTu es un expert en programmation python, et tu as accès à un interpréteur de code. Tu peux donc écrire du code pour t'aider à répondre à des questions plus complexes, ou nécessitant des opérations mathématiques.\n" -}}
-            {{- "Utilise la fonction `print` pour afficher les résultats auxquels tu veux avoir accès.\n" -}}
-
-            {%- if python_tools -%}
-                {{- "Tu as accès à ces fonctions te permettant d'effectuer des opérations complexes, ou de rechercher des informations supplémentaires :\n```python" -}}
-                {% for tool in python_tools %}
-                    {{- "\n" + tool.to_signature(lang = lang) + "\n" -}}
-                {% endfor %}
-                {{- "```\n\n" -}}
-            {%- endif -%}
-
-            {{- "Pour exécuter du code, utilise le format standard :\n```python\n... # ton code python\n```\n" -}}
-            {{- "Ton code sera exécuté dans un environnement python restreint. Tu n'as accès qu'aux librairies standards (excepté `os`), ainsi qu'à `numpy`.\n" -}}
-            {{- "\nRaisonne par étape :" -}}
-            {{- "\n1) Si aucune fonction n'est pertinente, réponds directement." -}}
-            {{- "\n2) Si il te manque des informations pour appeler une fonction, demande-les à l'utilisateur." -}}
-            {{- "\n3) Sinon appelle la/les fonction(s) dans un code python valide." -}}
-            {{- "\nTeste ton code en affichant des résultats (avec `print`), et corrige-toi si le résultat n'est pas celui attendu !" -}}
-
-            {%- if prompt_format == 'html' -%}
-                {{- "\n</ipython>" -}}
-            {%- endif -%}
-        {%- endif -%}
-
-        {%- if paragraphs -%}
-            {%- if prompt_format == 'markdown' -%}
-                {{- "\n\n## Informations\n\n" -}}
-            {%- elif prompt_format == 'html' -%}
-                {{- "\n<informations>\n" -}}
-            {%- endif -%}
-
-            {{- "Tu as accès à ces informations pour t'aider à répondre. **Utilise-les si elles sont pertinentes** !" -}}
-            {%- for para in paragraphs %}
-                {{- "\n\n" -}}
-                {% if 'filename' in para and (loop.index == 1 or para.filename != paragraphs[loop.index - 2].filename) -%}
-                    {{- "- Fichier : " + para.filename + "\n" -}}
-                    {% if 'title' in para %}
-                        {{- "- Titre : " + para.title + "\n" -}}
-                    {%- endif -%}
-                {% elif 'url' in para and (loop.index == 1 or para.url != paragraphs[loop.index - 2].url) %}
-                    {{- "- URL : " + para.url + "\n" -}}
-                    {% if 'title' in para %}
-                        {{- "- Titre : " + para.title + "\n" -}}
-                    {%- endif -%}
-                {%- endif -%}
-
-                {%- if 'page' in para and (loop.index == 1 or para.page != paragraphs[loop.index - 2].page)  -%}
-                    {{- "- Page #" + para.page|string + "\n" -}}
-                {%- endif -%}
-                {%- if 'section' in para and para.section %}
-                    {{- "- Section : " + para.section[-1] + "\n" }}
-                {%- endif -%}
-
-                {%- if para.type == 'code' -%}
-                    {{- "```" + para.language or "text" + "\n" + para.text + "\n```" -}}
-                {%- elif para.type == 'list' -%}
-                    {%- for item in para['items'] -%}
-                        {{- "\n- " + item|string }}
-                    {%- endfor -%}
-                {%- elif para.type == 'table' -%}
-                    {%- for row in para.rows -%}
-                        {{- "\n- " + row|string }}
-                    {%- endfor -%}
-                {%- elif 'text' in para -%}
-                    {{- para.text.strip("\n") -}}
-                {%- endif -%}
-            {%- endfor -%}
-        {% endif %}
 
         {%- if instructions and not instruct_in_last_message -%}
-            {%- if prompt_format == 'markdown' -%}
-                {{- "\n\n## Instructions" -}}
-            {%- elif prompt_format == 'html' -%}
-                {{- "\n\n<instructions>" -}}
-            {%- endif -%}
-
-            {% for instruct in instructions %}
-                {{- "\n- " + instruct -}}
-            {% endfor %}
-            {%- if python_tools -%}
-                {% for tool in python_tools %}
-                    {% for instruct in tool.get_instructions(lang = lang) %}
-                        {{- "\n- " + instruct -}}
-                    {% endfor %}
-                {% endfor %}
-            {%- endif -%}
-
-            {%- if prompt_format == 'html' -%}
-                {{- "\n</instructions>" -}}
-            {%- endif -%}
+            {{- instructions + "\n\n" -}}
         {%- endif -%}
 
         {%- if messages and messages|length > 2  -%}
@@ -155,86 +42,174 @@ prompts_default    = {
             {{- "\n\nTu as accès aux derniers messages de la conversation. Utilise-les pour contextualiser ta réponse et tes raisonnements.\n" -}}
         {%- endif -%}
     """),
-    'format'    : dedent("""
-        {%- if prefix -%}
-            {{- prefix -}}
+    'personnality_format'   : dedent("""
+        {%- if prompt_format == 'markdown' -%}
+            {{- "## Personnalité\n\n" -}}
+        {%- elif prompt_format == 'html' -%}
+            {{- "<personnalité>\n" -}}
         {%- endif -%}
 
-        {%- if is_vocal -%}
-            {{- "Transcription :\n" -}}
-        {%- endif -%}
+        {{- personnality -}}
 
-        {{- text -}}
+        {%- if prompt_format == 'html' -%}
+            {{- "\n</personnalité>" -}}
+        {%- endif -%}
     """),
-    'message_format'    : dedent("""
-        {%- if message.role == 'user' and (message.user or message.time) -%}
-            {%- if message.user -%}
-                {{- "\n- Nom de l'utilisateur : " + message.user -}}
-            {%- endif -%}
-            {%- if message.time -%}
-                {{- "\n- Date : " + timestamp_to_str(message.time) -}}
-            {%- endif -%}
+    'paragraphs_format' : dedent("""
+        {%- if prompt_format == 'markdown' -%}
+            {{- "## Informations\n\n" -}}
+        {%- elif prompt_format == 'html' -%}
+            {{- "<informations>\n" -}}
+        {%- endif -%}
+
+        {{- "Tu as accès à ces informations pour t'aider à répondre. **Utilise-les si elles sont pertinentes** !" -}}
+        
+        {%- for para in paragraphs -%}
             {{- "\n\n" -}}
+            {%- if loop.first -%}
+                {%- set last_para = {} -%}
+            {%- else -%}
+                {%- set last_para = paragraphs[loop.index - 2] -%}
+            {%- endif -%}
+            
+            {% if para['filename'] and para['filename'] != last_para['filename'] -%}
+                {{- "- Fichier : " + basename(para['filename']) + "\n" -}}
+                {% if 'title' in para %}
+                    {{- "- Titre : " + para['title'] + "\n" -}}
+                {%- endif -%}
+            {% elif para['url'] and para['url'] != last_para['url'] -%}
+                {{- "- URL : " + para['url'] + "\n" -}}
+                {% if 'title' in para %}
+                    {{- "- Titre : " + para['title'] + "\n" -}}
+                {%- endif -%}
+            {%- endif -%}
+
+            {% if 'page' in para and para['page'] != last_para['page'] -%}
+                {{- "- Page #" + para['page']|string + "\n" -}}
+            {%- endif -%}
+            
+            {%- if 'type' not in para -%}
+                {{- para['text']|trim -}}
+            {%- elif para['type'] == 'text' -%}
+                {{- para['text'] | trim -}}
+            {%- elif para['type'] == 'code' -%}
+                {{- "```" + para["language"] + "\n" + para["text"] | trim + "\n```" -}}
+            {%- elif para['type'] == 'list' -%}
+                {%- for item in para['items'] -%}
+                    {{- "\n- " + item|string }}
+                {%- endfor -%}
+            {%- elif para['type'] == 'table' -%}
+                {%- for item in para['rows'] -%}
+                    {{- "\n- " + item|string }}
+                {%- endfor -%}
+            {%- endif -%}
+        {%- endfor -%}
+
+        {%- if prompt_format == 'html' -%}
+            {{- "\n</informations>\n" -}}
+        {%- endif -%}
+    """),
+    'python_tools_format'   : dedent("""
+        {%- if prompt_format == 'markdown' -%}
+            {{- "\n\n## Environnement ipython" -}}
+        {%- elif prompt_format == 'html' -%}
+            {{- "\n\n<ipython>" -}}
         {%- endif -%}
 
-        {{- text -}}
+        {{- "\n\nTu es un expert en programmation python, et tu as accès à un interpréteur de code. Tu peux donc écrire du code pour t'aider à répondre à des questions plus complexes, ou nécessitant des opérations mathématiques.\n" -}}
+        {{- "Utilise la fonction `print` pour afficher les résultats auxquels tu veux avoir accès.\n" -}}
+
+        {%- if python_tools -%}
+            {{- "Tu as accès à ces fonctions te permettant d'effectuer des opérations complexes, ou de rechercher des informations supplémentaires :\n```python" -}}
+            {% for tool in python_tools %}
+                {{- "\n" + tool.to_signature(lang = lang) + "\n" -}}
+            {% endfor %}
+            {{- "```\n\n" -}}
+        {%- endif -%}
+
+        {{- "Pour exécuter du code, utilise le format standard :\n```python\n... # ton code python\n```\n" -}}
+        {{- "Ton code sera exécuté dans un environnement python restreint. Tu n'as accès qu'aux librairies standards (excepté `os`), ainsi qu'à `numpy`.\n" -}}
+        {{- "\nRaisonne par étape :" -}}
+        {{- "\n1) Si aucune fonction n'est pertinente, réponds directement." -}}
+        {{- "\n2) Si il te manque des informations pour appeler une fonction, demande-les à l'utilisateur." -}}
+        {{- "\n3) Sinon appelle la/les fonction(s) dans un code python valide." -}}
+        {{- "\nTeste ton code en affichant des résultats (avec `print`), et corrige-toi si le résultat n'est pas celui attendu !" -}}
+
+        {%- if prompt_format == 'html' -%}
+            {{- "\n</ipython>" -}}
+        {%- endif -%}
     """),
+    'instructions_format'   : dedent("""
+        {%- if prompt_format == 'markdown' -%}
+            {{- "\n\n## Instructions" -}}
+        {%- elif prompt_format == 'html' -%}
+            {{- "\n\n<instructions>" -}}
+        {%- endif -%}
+
+        {% for instruct in instructions %}
+            {{- "\n- " + instruct -}}
+        {% endfor %}
+
+        {%- if prompt_format == 'html' -%}
+            {{- "\n</instructions>" -}}
+        {%- endif -%}
+    """),
+    'pinned_format' : dedent("""
+        {%- if prompt_format == 'markdown' -%}
+            {{- "\n\n## Messages épinglés" -}}
+        {%- elif prompt_format == 'html' -%}
+            {{- "\n\n<pinned>\n" -}}
+        {%- endif -%}
+
+        {%- for message in pinned_messages -%}
+            {{- "[" + loop.index|string + "] " + message.content + "\n" -}}
+        {%- endfor -%}
+        {%- if prompt_format == 'html' -%}
+            {{- "\n</pinned>" -}}
+        {%- endif -%}
+
+    """),
+    'message_format'    : None,
     'last_message_format'   : dedent("""
         {%- if messages and messages|length > 2 and prompt_format == 'html'  -%}
             {{- "\n</conversation>\n\n" -}}
         {%- endif -%}
         
+        {%- if paragraphs and paragraphs_in_last_message -%}
+            {{- paragraphs + "\n\n" -}}
+        {% endif %}
+
         {%- if pinned_messages -%}
-            {%- if prompt_format == 'markdown' -%}
-                {{- "\n\n## Messages épinglés" -}}
-            {%- elif prompt_format == 'html' -%}
-                {{- "\n\n<pinned>\n" -}}
-            {%- endif -%}
-            
-            {%- for message in pinned_messages -%}
-                {{- "[" + loop.index|string + "] " + message.content + "\n" -}}
-            {%- endfor -%}
-            {%- if prompt_format == 'html' -%}
-                {{- "\n</pinned>" -}}
-            {%- endif -%}
+            {{- pinned_messages + "\n\n" -}}
         {%- endif -%}
     
         {%- if instructions and instruct_in_last_message -%}
-            {%- if prompt_format == 'markdown' -%}
-                {{- "\n\n## Instructions" -}}
-            {%- elif prompt_format == 'html' -%}
-                {{- "\n\n<instructions>" -}}
-            {%- endif -%}
-
-            {% for instruct in instructions %}
-                {{- "\n- " + instruct -}}
-            {% endfor %}
-            {%- if python_tools -%}
-                {% for tool in python_tools %}
-                    {% for instruct in tool.get_instructions(lang = lang) %}
-                        {{- "\n- " + instruct -}}
-                    {% endfor %}
-                {% endfor %}
-            {%- endif -%}
-
-            {%- if prompt_format == 'html' -%}
-                {{- "\n</instructions>" -}}
-            {%- endif -%}
+            {{- instructions + "\n\n" -}}
         {%- endif -%}
 
         {{- text -}}
     """)
+
+
+}
+
+prompts_default    = {
+    ** _default_formats,
+
+    'personnality'   : (
+        "Tu es un assistant IA. Tu dois répondre du mieux possible aux demandes de l'utilisateur."
+    )
 }
 
 prompts_expert   = {
-    'personnality_prompt' : (
+    'personnality' : (
         "Tu es un expert en {domain} avec le background suivant : {background}\n\n",
         "Réponds du mieux possible aux questions qui te sont posées."
     )
 }
 
 prompts_rag    = {
-    'format'    : dedent("""
+    'prefix'    : dedent("""
         {{- "\n\nRéponds UNIQUEMENT sur base des informations fournies !\n" -}}
 
         {% if add_source %}
@@ -252,7 +227,7 @@ prompts_translate    = {
             {% set target_lang = 'anglais' %}
         {%- endif -%}
         
-        {{- "Traduis ce texte en " + target_lang + "\n\n" -}}
+        {{- "Traduis ce texte en " + target_lang + ":\n\n" -}}
     """),
     'answer_start'  : 'La traduction est :\n\n',
 }
@@ -270,15 +245,17 @@ prompts_summarize  = {
 }
 
 prompts_extract_entities  = {
-    'format'    : prompts_default['format'] + "\n\n" + dedent("""
+    'format'    : dedent("""
+        {{- text -}}
+        
         {{- "Retrouve les informations demandées et fais-en un résumé clair et concis au format JSON. Si une information est manquante, mets `null`.\n\n" }}
 
         {{- "Voici les informations à extraire :\n```json\n{\n" }}
         {%- for key, value in entities.items() %}
-            {{- "    \"" + key + "\": # " + value + "\n" }}
+            {{- "    '" + key + "': # " + value + "\n" }}
         {%- endfor %}
         {{- "}\n```\n" -}}
     """),
     'answer_start'  : "Voici les informations demandées :\n\n```json\n",
-    'stop_words'    : '```'
+    'stop_condition'    : lambda text: text.rstrip().endswith('```')
 }

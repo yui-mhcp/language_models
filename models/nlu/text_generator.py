@@ -13,17 +13,18 @@ import os
 import re
 import logging
 import inspect
+import warnings
 
 from functools import partial
 
 from loggers import Timer, timer
-from utils.text import format_text, parse_document, search_on_web
+from utils.text import parse_document, search_on_web
 from utils.callbacks import apply_callbacks
 from .inference_manager import InferenceManager
-from .prompts import add_prompt_wrapper, get_translation
+from .prompts import PromptFormatter, add_prompt_wrapper
 from .base_language_model import BaseLanguageModel
 from .tools import execute_code, extract_code, format_code_result, normalize_tools, remove_simulated_output
-from .conversations import Chat, Conversation, Message, get_message_selector, get_messages
+from .conversations import ConversationManager, Conversation, Message
 
 logger = logging.getLogger(__name__)
 
@@ -44,39 +45,20 @@ class TextGenerator(BaseLanguageModel):
     def __init__(self, * args, ** kwargs):
         super().__init__(* args, ** kwargs)
         
-        self._chats = {}
+        self.conv_manager   = ConversationManager(self.conv_dir, self.tokenizer)
+        self.prompt_formatter   = PromptFormatter(self.tokenizer)
     
     @property
     def max_output_length(self):
         return getattr(self.model, 'max_output_length', None)
     
-    def get_chat(self, chat_id):
-        if chat_id not in self._chats:
-            filename = os.path.join(self.conv_dir, '{}.json'.format(chat_id))
-            if os.path.exists(filename):
-                self._chats[chat_id] = Chat.load(filename)
-            else:
-                self._chats[chat_id] = Chat(id = chat_id)
-        
-        return self._chats[chat_id]
-    
-    def get_conv(self, chat_id = 'default', chat = None, ** kwargs):
-        if chat is None: chat = self.get_chat(chat_id)
-        return chat.get_conv(** kwargs)
-    
     @timer
     @add_prompt_wrapper('default')
     def infer(self,
-              text,
+              text  = None,
               *,
               
-              prefix    = None,
-              format    = None,
-              
               conv  = None,
-              conv_id   = None,
-              messages  = None,
-              message_selector  = 'last',
               max_input_length  = None,
               
               tools = None,
@@ -95,6 +77,9 @@ class TextGenerator(BaseLanguageModel):
               stream_callback   = None,
               wait_finalization = False,
 
+              save  = True,
+              directory = None,
+              
               callbacks = None,
               predicted = None,
               
@@ -155,25 +140,30 @@ class TextGenerator(BaseLanguageModel):
         #    State initialization    #
         ##############################
         
-        _root_call = False
+        query       = None
+        _root_call  = False
         if _inference_manager is None:
             _root_call = True
             
-            if max_input_length is None: max_input_length = float('inf')
+            if max_input_length is None:
+                max_input_length = float('inf')
             if self.max_input_length:
                 max_input_length = min(max_input_length, self.max_input_length)
             
-            if conv is None:
-                if messages is None:
-                    conv = self.get_conv(conv_id = conv_id, ** kwargs)
-                else:
-                    conv = Conversation(messages = [Message(** msg) for msg in messages])
-        
             if tools:
                 tools = normalize_tools(tools)
             else:
                 tools = []
+
+            if conv is None:
+                conv = self.conv_manager.get_conversation(directory = directory, ** kwargs)
             
+            query = self.prompt_formatter.prepare_query(text, ** kwargs)
+            
+            context = self.conv_manager.get_context(
+                conv, query, max_length = max_input_length, directory = directory, ** kwargs
+            )
+
             tool_names = ['print'] + [tool.name for tool in tools]
             if self.runtime == 'trt_llm':
                 if tools or allow_code_execution:
@@ -210,32 +200,10 @@ class TextGenerator(BaseLanguageModel):
         #   Prepare input  #
         ####################
         
-        query = text
-        if format:
-            if prefix: prefix = format_text(prefix, ** kwargs)
-            text = format_text(format, text = text, prefix = prefix, ** kwargs)
-
-        messages    = get_messages(
-            conv,
-            message_selector,
-            max_length  = max_input_length,
-            tokenizer   = self.tokenizer,
-            ** kwargs
+        prompt, prompt_info = self.prompt_formatter.get_prompt(
+            query, allow_code_execution = allow_code_execution, ** {** kwargs, ** context}
         )
-        
-        prompt, tokens = self.get_input(
-            text,
-            messages    = messages,
-            instructions    = conv.instructions,
-            pinned_messages = conv.pinned,
-            python_tools    = tools,
-            allow_code_execution    = allow_code_execution,
-
-            max_length  = max_input_length,
-            return_text = True,
-            
-            ** kwargs
-        )
+        tokens = self.tokenizer.encode(prompt, add_eos = False, return_type = 'np')
         
         if _inference_manager.is_aborted():
             return {}
@@ -258,7 +226,11 @@ class TextGenerator(BaseLanguageModel):
             return {}
 
         pred = self.decode_output(out)[0]
-        if isinstance(pred, list) and len(pred) == 1: pred = pred[0]
+        if isinstance(pred, list):
+            if len(pred) > 1:
+                warnings.warn('Multiple outputs have been generated, which is not supported yet. Only the 1st one will be returned')
+            pred = pred[0]
+        
         if add_answer_start and kwargs.get('answer_start', None):
             pred = kwargs['answer_start'] + pred
 
@@ -272,9 +244,9 @@ class TextGenerator(BaseLanguageModel):
 
         _inference_manager.append(pred)
         
-        if text:
-            conv.append(text, role = 'user', query = query, format = format, ** kwargs)
-        conv.append(pred, role = 'assistant', prompt = prompt)
+        self.conv_manager.add_answer(
+            conv, query = query, prompt = prompt, answer = pred, context = context
+        )
 
         if code_block and _contains_tool(code_block, tool_names):
             if logger.isEnabledFor(logging.DEBUG):
@@ -321,6 +293,7 @@ class TextGenerator(BaseLanguageModel):
         result = {
             'predicted' : full_output,
             
+            'conv'  : conv,
             'query' : query,
             'format'    : format,
             'prompt'    : prompt,
@@ -334,6 +307,9 @@ class TextGenerator(BaseLanguageModel):
             return result
         elif callbacks:
             apply_callbacks(callbacks, {}, result, save = False)
+        
+        if save:
+            self.conv_manager.save(conv, directory = directory)
         
         return result
 

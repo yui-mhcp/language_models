@@ -61,7 +61,10 @@ class InferenceManager:
         self._all_results   = []
         self._inference_stream  = None
         
-        self._decode    = tokenizer.decode if self.stream_text else lambda out: out
+        if self.stream_text:
+            self._decode    = lambda out: tokenizer.decode(out)[0][0]
+        else:
+            self._decode    = lambda out: out
         self._streaming = self.request_manager is not None or self.callback is not None
         self._inference_config  = {'streaming' : self._streaming}
     
@@ -179,7 +182,7 @@ class InferenceManager:
                 return False
 
             if hasattr(self.request_manager, 'finalize'):
-                self.request_manager.finalize(request_id)
+                self.request_manager.finalize(self.request_id)
         
         if self.request_id is not None:
             logger.info('Request {} is finished !'.format(self.request_id))

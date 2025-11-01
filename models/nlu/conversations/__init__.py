@@ -9,24 +9,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .base_chat import Chat, Conversation, Message
-from .message_selector import MessageSelector, LastMessageSelector
-
-_selectors = {
-    k.replace('MessageSelector', '').lower() : v for k, v in globals().items()
-    if isinstance(v, type) and issubclass(v, MessageSelector)
-}
-
-def get_message_selector(name, ** kwargs):
-    normalized = name.replace('MessageSelector', '').lower()
-    if normalized not in _selectors:
-        raise ValueError('Unknown message selector : {}'.format(name))
-    
-    return _selectors[normalized](** kwargs)
-
-def get_messages(conv, selector = 'last', ** kwargs):
-    if isinstance(selector, str):
-        selector = get_message_selector(selector)
-    
-    return selector(conv, ** kwargs)
-    
+from .message import Message
+from .conversation import Conversation
+from .conversation_manager import ConversationManager
