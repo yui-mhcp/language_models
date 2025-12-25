@@ -24,8 +24,8 @@ class BaseLanguageModel(BaseTextModel):
     
     def __init__(self, lang, input_format = None, max_input_length = None, ** kwargs):
         pretrained = kwargs.pop('pretrained', self._default_pretrained_model)
-        if pretrained and 'tokenizer' not in kwargs:
-            kwargs['tokenizer'] = get_tokenizer(lang = None, tokenizer = pretrained)
+        if 'tokenizer' not in kwargs and pretrained:
+            kwargs['tokenizer'] = pretrained
 
         self._init_text(lang = lang, ** kwargs)
         

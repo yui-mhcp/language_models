@@ -11,6 +11,9 @@
 
 import time
 
+from datetime import datetime
+from functools import cached_property
+
 from loggers import Timer, timer
 from utils import timestamp_to_str
 from utils.text import format_text
@@ -18,16 +21,37 @@ from utils.text import format_text
 format_text = timer(format_text)
 
 class PromptFormatter:
-    def __init__(self, tokenizer):
+    def __init__(self, tokenizer, audio_token = None, image_token = None, video_token = None):
         self.tokenizer = tokenizer
+        
+        self.audio_token = audio_token
+        self.image_token = image_token
+        self.video_token = video_token
     
     @property
     def template(self):
         return self.tokenizer.template
     
-    def prepare_query(self, text, *, format = None, prefix = None, ** kwargs):
+    @property
+    def is_text_only(self):
+        return not self.image_token and not self.video_token and not self.audio_token
+    
+    @property
+    def is_omni(self):
+        return self.image_token and self.video_token and self.audio_token
+
+    @cached_property
+    def supported_types(self):
+        supported = ['text']
+        if self.image_token: supported.append('image')
+        if self.video_token: supported.append('video')
+        if self.audio_token: supported.append('audio')
+        return supported
+    
+    def prepare_query(self, text, *, format = None, prefix = None, suffix = None, ** kwargs):
         if format: text = format_text(format, text = text, ** kwargs)
         if prefix: text = format_text(prefix, ** kwargs) + text
+        if suffix: text = text + format_text(suffix, ** kwargs)
         
         return text
 
@@ -83,16 +107,30 @@ class PromptFormatter:
         # Prepare formats  #
         ####################
 
+        multimodal_data = {}
+        if not self.is_text_only and 'paragraphs_format' in kwargs and kwargs.get('paragraphs', ()):
+            for para in kwargs.get('paragraphs', []):
+                content = para.get('content', [para])
+                for c in content:
+                    if c['type'] in self.supported_types[1:]:
+                        multimodal_data.setdefault(c['type'], []).append(c)
+
         with Timer('initialization'):
             formats = {k[:-7] : kwargs.pop(k) for k in list(kwargs.keys()) if k.endswith('_format')}
 
             kwargs.update(self.tokenizer.tokens)
             kwargs.update({
+                'audio_token'   : self.audio_token,
+                'image_token'   : self.image_token,
+                'video_token'   : self.video_token,
+                
                 'prompt_format' : prompt_format,
                 'timestamp_to_str'  : timestamp_to_str
             })
             if 'date_string' not in kwargs and 'date_string' in self.template:
                 kwargs['date_string'] = timestamp_to_str(time.time(), include_time = False)
+            elif 'strftime_now' in self.template:
+                kwargs['strftime_now'] = lambda fmt: datetime.now().strftime(fmt)
 
             for key, _format in formats.items():
                 if kwargs.get(key, None):
@@ -115,34 +153,66 @@ class PromptFormatter:
                 ))
             else:
                 messages = messages.copy()
+                for i, message in enumerate(messages):
+                    if not isinstance(message, dict):
+                        messages[i] = message.to_dict()
 
             if text:
                 messages.append(_build_message(text, ** kwargs))
+            
+            if any(isinstance(msg['content'], list) for msg in messages):
+                for i, message in enumerate(messages):
+                    if isinstance(message['content'], str):
+                        continue
 
+                    message = message.copy()
+                    if self.is_text_only:
+                        message['content'] = '\n\n'.join([
+                            c['text'] for c in message['content'] if c.get('text', None)
+                        ])
+                    else:
+                        message['content'] = [
+                            c for c in message['content'] if c['type'] in self.supported_types
+                        ]
+
+                        if len(message['content']) == 1 and message['content'][0]['type'] == 'text':
+                            message['content'] = message['content'][0]['text']
+                        else:
+                            for c in message['content']:
+                                if c['type'] != 'text':
+                                    multimodal_data.setdefault(c['type'], []).append(c)
+
+                    messages[i] = message
+        
+        with Timer('messages formatting'):
             if message_format:
                 for i, message in enumerate(messages):
-                    if isinstance(message, dict):
-                        message = message.copy()
-                    else:
-                        message = message.to_dict()
-
-                    if i or message['role'] != 'system':
+                    if i == 0 and message['role'] == 'system':
+                        continue
+                    
+                    message = message.copy()
+                    if isinstance(message['content'], str):
                         message['content'] = format_text(
                             message_format, text = message['content'], message = message, ** kwargs
                         )
+                    else:
+                        message['content'] = message['content'].copy()
+                        message['content'].insert(0, {'type' : 'text', 'text' : format_text(
+                            message_format, text = message['content'], message = message, ** kwargs
+                        )})
 
                     messages[i] = message
 
             if last_message_format:
-                if not message_format:
-                    if isinstance(messages[-1], dict):
-                        messages[-1] = messages[-1].copy()
-                    else:
-                        messages[-1] = messages[-1].to_json()
-
-                messages[-1]['content'] = format_text(
-                    last_message_format, text = messages[-1]['content'], message = messages[-1], ** kwargs
+                last_msg  = messages[-1].copy()
+                formatted = format_text(
+                    last_message_format, text = last_msg['content'], message = last_msg, ** kwargs
                 )
+                if isinstance(last_msg['content'], str):
+                    last_msg['content'] = formatted
+                else:
+                    last_msg['content'] = [{'type' : 'text', 'text' : formatted}] + last_msg['content']
+                messages[-1] = last_msg
 
             if system_prompt and messages[0]['role'] != 'system':
                 messages.insert(0, {
@@ -157,16 +227,15 @@ class PromptFormatter:
             ** kwargs
         )
         
-        if answer_start:
+        if add_generation_prompt and answer_start:
             prompt = prompt + answer_start
         
-        return prompt, {}
+        return prompt, multimodal_data
 
-def _build_message(content, content_type = 'text', user = None, ** kwargs):
+def _build_message(content, user = None, ** kwargs):
     return {
         'role'      : 'user',
         'content'   : content,
-        'content_type'  : content_type,
         'time'      : time.time(),
         'user'      : user
     }

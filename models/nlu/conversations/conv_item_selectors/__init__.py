@@ -12,8 +12,6 @@
 import os
 import importlib
 
-from .conv_item_selector import ConvItemSelector
-
 _selectors = {}
 for module in os.listdir(__package__.replace('.', os.path.sep)):
     if module.startswith(('.', '_')) or '_old' in module: continue
@@ -21,21 +19,20 @@ for module in os.listdir(__package__.replace('.', os.path.sep)):
     
     for k, v in vars(module).items():
         if k.startswith('select_'):
-            _selectors[k[7:]] = v
-        elif isinstance(v, type) and issubclass(v, ConvItemSelector):
-            _selectors[k[:-8]] = v
-
-globals().update(_selectors)
+            _selectors[k[7:].lower()] = v
+        elif k.endswith('Selector'):
+            _selectors[k[:-8].lower()] = v
 
 def get_selector(name, ** kwargs):
-    """ Return the `MessageSelector` associated to the given `name` """
-    if isinstance(name, type) and issubclass(name, ConvItemSelector):
+    """ Return the item selector (callable or class) associated to the given `name` """
+    if isinstance(name, type):
         return name(** kwargs)
     elif callable(name):
         return name
     elif isinstance(name, str):
+        name = name.lower()
         if name.startswith('select_'):  name = name[7:]
-        elif name.endswith('Selector'): name = name[:-8]
+        elif name.endswith('selector'): name = name[:-8]
         
         if name not in _selectors:
             raise ValueError('Unknown item selector : {}\n  Accepted : {}'.format(
@@ -47,24 +44,29 @@ def get_selector(name, ** kwargs):
     else:
         raise ValueError('Unsupported selector : {}'.format(name))
 
-def select_items(query, items, *, selector = 'last', conv = None, ** kwargs):
+def select_items(query, items, *, selector = 'last', ** kwargs):
     """
-        Call the message selection strategy (`selector`) on the given conversation (`conv`)
+        Call the item selection strategy (`selector`) on the given conversation (`conv`)
         
         Arguments :
-            - conv  : the `Conversation` to process
+            - query : the user formatted message (typically used in similarity-based search)
+            - items : the list of candidates in which to select
             - selector  : the message selection strategy
-                          - str : the `MessageSelector`'s name
-                          - callable    : a function returning a list of `Message` from `conv`
-                                          `selector(conv, ** kwargs) -> List[Message]`
-                          - MessageSelector : a `MessageSelector` subclass
+                          - str : the name of the method/class to use
+                          - callable    : a function returning a list of `dict` from `items`
+                                          `selector(query, items, ** kwargs) -> List[dict]`
+            - kwargs    : additional kwargs forwarded to the method
+                    - conv  : the `Conversation` object
+                    - tokenizer : the `Tokenizer` to use for item length computation
+                    - directory : the path where to save files (if needed)
+                    - documents : possible documents to use
         Return :
-            - messages  : a `list` of `Message` from `conv`
+            - selected_items  : a `list` of `dict` from `items`
     """
     if not items: return [], 0
 
     if isinstance(selector, (str, type)):
         selector = get_selector(selector, ** kwargs)
     
-    return selector(query, items, conv = conv, ** kwargs)
+    return selector(query, items, ** kwargs)
     

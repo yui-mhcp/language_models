@@ -9,22 +9,28 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-_document_content_types = ('document', 'image', 'audio', 'video')
+import os
 
-def select_all(query, items, *, tokenizer, max_length = None, ** kwargs):
+from utils.text import parse_document
+
+def select_all(query, items, *, tokenizer, max_items = None, max_length = None, directory = None, ** kwargs):
+    if 'documents' in kwargs:
+        items = parse_document(
+            kwargs['documents'],
+            cache_dir       = os.path.join(directory, '.cache') if directory else None,
+            image_folder    = os.path.join(directory, '.cache', '{}') if directory else None
+        )
+    
     if not max_length:
-        return [item for item in items if item['content_type'] not in _document_content_types], None
+        return items[:max_items], None
     
     selected, total_length = [], 0
-    for item in items:
-        if item.get('content_type', 'text') in _document_content_types:
-            continue
-        
-        if 'length' not in item or not item['length']:
-            item['length'] = len(tokenizer.tokenize(str(item['content'])))
+    for item in items[:max_items]:
+        if not item.get('length', None) and isinstance(item.get('content', None), str):
+            item['length'] = len(tokenizer.tokenize(item['content']))
         
         selected.append(item)
-        total_length += item['length']
+        total_length += item.get('length', 0)
     
     return selected, total_length
 

@@ -15,6 +15,7 @@ import logging
 import inspect
 import warnings
 
+from copy import deepcopy
 from functools import partial
 
 from loggers import Timer, timer
@@ -46,19 +47,38 @@ class TextGenerator(BaseLanguageModel):
         super().__init__(* args, ** kwargs)
         
         self.conv_manager   = ConversationManager(self.conv_dir, self.tokenizer)
-        self.prompt_formatter   = PromptFormatter(self.tokenizer)
+        self.prompt_formatter   = PromptFormatter(
+            self.tokenizer,
+            audio_token = getattr(self, 'audio_token', None),
+            image_token = getattr(self, 'image_token', None),
+            video_token = getattr(self, 'video_token', None),
+        )
     
     @property
     def max_output_length(self):
         return getattr(self.model, 'max_output_length', None)
+    
+    def prepare_multimodal_data(self, tokens, ** data):
+        multimodal_inputs = {
+            k : getattr(self, 'prepare_{}'.format(k))(v) for k, v in data.items()
+        }
+        
+        if multimodal_inputs:
+            tokens = self.insert_multimodal_tokens(tokens, multimodal_inputs)
+        
+        return tokens, multimodal_inputs
+    
+    def insert_multimodal_tokens(self, tokens, multimodal_inputs):
+        raise NotImplementedError('{} is not multimodal'.format(self.name))
     
     @timer
     @add_prompt_wrapper('default')
     def infer(self,
               text  = None,
               *,
-              
+
               conv  = None,
+              documents = None,
               max_input_length  = None,
               
               tools = None,
@@ -77,7 +97,8 @@ class TextGenerator(BaseLanguageModel):
               stream_callback   = None,
               wait_finalization = False,
 
-              save  = True,
+              save  = None,
+              conv_id   = None,
               directory = None,
               
               callbacks = None,
@@ -143,6 +164,12 @@ class TextGenerator(BaseLanguageModel):
         query       = None
         _root_call  = False
         if _inference_manager is None:
+            if save is None: save = conv_id is not None or conv is not None
+            
+            if save:
+                if conv_id is None:     conv_id = 'cli'
+                if directory is None:   directory = self.conv_dir
+            
             _root_call = True
             
             if max_input_length is None:
@@ -156,14 +183,13 @@ class TextGenerator(BaseLanguageModel):
                 tools = []
 
             if conv is None:
-                conv = self.conv_manager.get_conversation(directory = directory, ** kwargs)
+                conv = self.conv_manager.get_conversation(
+                    conv_id = conv_id, directory = directory, ** kwargs
+                )
             
-            query = self.prompt_formatter.prepare_query(text, ** kwargs)
+            if save:
+                os.makedirs(os.path.join(directory, conv.id), exist_ok = True)
             
-            context = self.conv_manager.get_context(
-                conv, query, max_length = max_input_length, directory = directory, ** kwargs
-            )
-
             tool_names = ['print'] + [tool.name for tool in tools]
             if self.runtime == 'trt_llm':
                 if tools or allow_code_execution:
@@ -181,7 +207,7 @@ class TextGenerator(BaseLanguageModel):
                 raise NotImplementedError('The arguments `tools`, `allow_code_execution` and `possible_answers` are only supported with `TensorRT-LLM` runtime')
 
             _inference_manager  = InferenceManager(
-                initial_state   = conv.get_state(),
+                conversation    = conv,
                 
                 tokenizer   = self.tokenizer,
                 stream_text = stream_text,
@@ -193,6 +219,24 @@ class TextGenerator(BaseLanguageModel):
             )
             
             kwargs.update(_inference_manager.get_inference_config())
+            
+            query = self.prompt_formatter.prepare_query(text, ** kwargs)
+            
+            if documents:
+                kwargs['attachments'] = conv.add_document(documents)
+            
+            context = self.conv_manager.get_context(
+                conv,
+                query,
+                directory   = directory,
+                documents   = documents,
+                max_length  = max_input_length,
+                ** kwargs
+            )
+
+            context.setdefault('messages', []).append(
+                conv.add_message(text = query, role = 'user', ** kwargs)
+            )
         else:
             tool_names = ['print'] + [tool.name for tool in tools]
         
@@ -200,10 +244,18 @@ class TextGenerator(BaseLanguageModel):
         #   Prepare input  #
         ####################
         
-        prompt, prompt_info = self.prompt_formatter.get_prompt(
-            query, allow_code_execution = allow_code_execution, ** {** kwargs, ** context}
+        prompt, multimodal_data = self.prompt_formatter.get_prompt(
+            allow_code_execution = allow_code_execution, ** {** kwargs, ** context}
         )
         tokens = self.tokenizer.encode(prompt, add_eos = False, return_type = 'np')
+        
+        infer_kwargs = kwargs.copy()
+        if multimodal_data:
+            conv_dir = os.path.join(directory, conv.id) if save else None
+            tokens, multimodal_inputs = self.prepare_multimodal_data(
+                tokens, directory = conv_dir, ** multimodal_data
+            )
+            infer_kwargs.update(multimodal_inputs)
         
         if _inference_manager.is_aborted():
             return {}
@@ -216,7 +268,7 @@ class TextGenerator(BaseLanguageModel):
         ####################
         
         out = self.compiled_infer(
-            tokens[None], max_new_tokens = max_new_tokens, tokenizer = self.tokenizer, ** kwargs
+            tokens[None], tokenizer = self.tokenizer, max_new_tokens = max_new_tokens, ** infer_kwargs
         )
         if self.runtime == 'trt_llm':
             _inference_manager.set_inference_stream(out)
@@ -244,8 +296,8 @@ class TextGenerator(BaseLanguageModel):
 
         _inference_manager.append(pred)
         
-        self.conv_manager.add_answer(
-            conv, query = query, prompt = prompt, answer = pred, context = context
+        context['messages'].append(
+            conv.add_message(text = pred, role = 'assistant', prompt = prompt)
         )
 
         if code_block and _contains_tool(code_block, tool_names):

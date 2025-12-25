@@ -31,25 +31,6 @@ class ConversationManager:
         
         self._convs = {}
     
-    def add_answer(self,
-                   conv,
-                   answer,
-                   context,
-                   *,
-                   
-                   query    = None,
-                   prompt   = None,
-                   ** kwargs
-                  ):
-        if query:
-            context['messages'].append(
-                conv.add_message(query, role = 'user', ** kwargs)
-            )
-        
-        context['messages'].append(
-            conv.add_message(answer, role = 'assistant', prompt = prompt)
-        )
-    
     @timer
     def get_context(self,
                     conv,
@@ -58,6 +39,8 @@ class ConversationManager:
                     
                     directory   = None,
                     documents   = None,
+                    attachments = None,
+                    use_specified_documents = False,
                     
                     messages_selector   = 'last',
                     paragraphs_selector = None,
@@ -68,16 +51,29 @@ class ConversationManager:
                     
                     ** kwargs
                    ):
+        if directory is None: directory = self.path
+        if directory:         directory = os.path.join(directory, conv.id)
+        
         kwargs.update({
+            'directory' : directory,
+            'tokenizer' : self.tokenizer,
             'messages_selector' : messages_selector,
             'paragraphs_selector'   : paragraphs_selector,
             'instructions_selector' : instructions_selector
         })
         
+        if attachments and 'Attachments' not in query:
+            if isinstance(attachments, str): attachments = [attachments]
+            query = 'Attachments:{}\n\n{}'.format(
+                ' ' + attachments[0] if len(attachments) == 1 else ''.join([
+                    '\n- ' + f for f in attachments
+                ]), query
+            )
+        
         remaining_length = max_length
         default_selector = kwargs.pop('selector', None)
         
-        context = {k : None for k in selection_order}
+        context = {}
         for k in selection_order:
             if remaining_length and remaining_length <= MIN_LENGTH_THRESHOLD:
                 warnings.warn('The context length is about to exceed `max_length`, stopping item selection')
@@ -87,27 +83,26 @@ class ConversationManager:
             if not item_selector:
                 continue
             
+            config = kwargs.copy()
             if '{}_selector_config'.format(k) in kwargs:
-                config = kwargs.copy()
                 config.update(config.pop('{}_selector_config'.format(k)))
-            else:
-                config = kwargs
             
             if logger.isEnabledFor(logging.DEBUG):
-                logger.debug('Using selector {} for key {}'.format(item_selector, k))
+                logger.debug('Using `{}` selector for key `{}`'.format(item_selector, k))
             
             with Timer('{}_selector'.format(k)):
+                if k == 'paragraphs':
+                    config.update({
+                        'items' : conv.documents,
+                        'documents' : documents if use_specified_documents else conv.documents
+                    })
+                else:
+                    config['items'] = getattr(conv, k)
+                
                 context[k], length = select_items(
                     query,
-                    getattr(conv, k) if k != 'paragraphs' else conv.documents,
-                    selector    = item_selector,
-
                     conv    = conv,
-                    documents   = None if k != 'paragraphs' else [
-                        doc.content for doc in conv.documents
-                    ],
-                    directory   = os.path.join(directory or self.path, conv.id),
-                    tokenizer   = self.tokenizer,
+                    selector    = item_selector,
                     max_length  = remaining_length,
                     ** config
                 )
@@ -123,10 +118,7 @@ class ConversationManager:
                          directory  = None,
                          
                          messages   = None,
-                         documents  = None,
                          instructions   = None,
-                         
-                         remove_unspecified_documents   = False,
                          
                          ** kwargs
                         ):
@@ -135,8 +127,8 @@ class ConversationManager:
         if conv_id is None:
             conv_id = _in_memory_conv_id
             if messages is not None: self._convs.pop((directory, conv_id), None)
-        else:
-            path = os.path.join(directory, '{}.json'.format(conv_id))
+        elif (directory, conv_id) not in self._convs:
+            path = self.get_conv_file(directory, conv_id)
             if os.path.exists(path):
                 self._convs[(directory, conv_id)] = Conversation.load(path)
         
@@ -149,20 +141,18 @@ class ConversationManager:
             if messages:
                 for msg in messages: conv.add_message(msg)
             
-            self._convs[(directory, conv.id)] = conv
-        
-        if instructions:
-            for inst in instructions: conv.add_instruction(inst)
+            if instructions:
+                if isinstance(instructions, str): instructions = [instructions]
+                for inst in instructions: conv.add_instruction(inst)
 
-        if documents is not None:
-            for doc in documents: conv.add_document(doc)
-            
-            if remove_unspecified_documents:
-                for doc in conv.documents.copy():
-                    if doc not in documents: conv.remove_document(doc)
+            self._convs[(directory, conv.id)] = conv
 
         return conv
 
     def save(self, conv, directory = None):
         if conv.id != _in_memory_conv_id:
-            conv.save(os.path.join(directory or self.path, '{}.json'.format(conv.id)))
+            conv.save(self.get_conv_file(directory or self.path, conv.id))
+    
+    @staticmethod
+    def get_conv_file(directory, conv_id):
+        return os.path.join(directory, conv_id, 'conversation.json')

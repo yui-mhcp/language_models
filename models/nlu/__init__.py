@@ -15,13 +15,15 @@ import importlib
 from utils import setup_environment
 from ..interfaces import BaseModel
 
+_models = {}
 for module in os.listdir(__package__.replace('.', os.path.sep)):
     if module.startswith(('.', '_')) or '_old' in module: continue
     module = importlib.import_module(__package__ + '.' + module.replace('.py', ''))
     
-    globals().update({
+    _models.update({
         k : v for k, v in vars(module).items() if isinstance(v, type) and issubclass(v, BaseModel)
     })
+globals().update(_models)
 
 def get_model(model):
     if isinstance(model, (str, dict)):

@@ -43,16 +43,16 @@ def select_last_messages(query,
 
     messages, n, total_length = [], 0, 0
     for message in reversed(items):
-        if message['content_type'] != 'text' or message['role'] == 'system':
+        if message.get('role', '') == 'system':
             continue
         
-        if 'length' not in message or not message['length']:
+        if not message.get('length', None) and isinstance(message.get('content', None), str):
             message['length'] = len(tokenizer.tokenize(message['content']))
 
-        if messages and n >= min_messages and total_length + message['length'] > max_length:
+        if messages and n >= min_messages and total_length + message.get('length', 0) > max_length:
             break
 
-        total_length += message['length']
+        total_length += message.get('length', 0)
         messages.append(message)
 
         if message['role'] == 'user':

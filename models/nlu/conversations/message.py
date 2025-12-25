@@ -12,7 +12,7 @@
 import time
 import uuid
 
-from typing import Dict, Any
+from typing import Dict, Any, Union, List
 from dataclasses import dataclass, field
 
 @dataclass
@@ -23,8 +23,14 @@ class Message:
         
         Arguments :
             - role      : the role of the message sender ('user', 'assistant', 'system', ...)
-            - content   : the message content (text, filename, ...)
-            - content_type  : the type of content ('text', 'image', 'audio', ...)
+            - content   : the message content, either a string (raw text) either a list of items
+                          Each item should be a `dict` with a `type` entry
+                          - text    : text content, should have a "text" entry
+                          - image   : image file, should have a "image" or "image_url" entry
+                          - audio   : audio file, should have a "audio" or "audio_url" entry
+                          - video   : video file, should have a "video" or "video_url" entry
+                          Each of the multimodal content can have a "text" entry used for text-only models (e.g., a caption or the transcription)
+            - attachments   : list of filename(s) attached to this message
             
             - user  : the user name that sent the message (None if `type != 'user'`)
             
@@ -35,8 +41,8 @@ class Message:
             - infos : additional information
     """
     role    : str
-    content : str
-    content_type    : str   = field(default = 'text', repr = False)
+    content : Union[str, List[Dict[str, str]]]
+    attachments : List[str] = field(default_factory = list, repr = False)
     
     user    : str = field(default = None)
     
@@ -48,8 +54,11 @@ class Message:
     
     @property
     def text(self):
-        return self.content
-
+        if isinstance(self.content, str):
+            return self.content
+        else:
+            return '\n'.join(content['text'] for content in self.content if context.get('text', None))
+    
     def __getitem__(self, key):
         if key == 'text':           return self.text
         elif key in self.__dict__:  return self.__dict__[key]
@@ -57,7 +66,7 @@ class Message:
         else: raise KeyError('`Message` has no attribute {}'.format(key))
     
     def __setitem__(self, key, value):
-        if key == 'text': self.content = value
+        if key == 'text':   self.content = value
         elif key in self.__dataclass_fields__: setattr(self, key, value)
         else: self.metadata[key] = value
     

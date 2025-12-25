@@ -23,7 +23,7 @@ END_OF_REQUEST  = inspect._empty
 
 class InferenceManager:
     def __init__(self,
-                 initial_state,
+                 conversation,
                  *,
                  
                  tokenizer  = None,
@@ -52,7 +52,8 @@ class InferenceManager:
         self.request_manager    = request_manager
         self.wait_finalization  = wait_finalization
         
-        self._initial_state = initial_state
+        self.conversation   = conversation
+        self._initial_state = conversation.get_state()
         
         if hasattr(self.request_manager, 'build'):
             self.request_manager.build()
@@ -94,6 +95,8 @@ class InferenceManager:
     def abort(self):
         if self._aborted: return
         
+        self.conversation.set_state(self.initial_state)
+        
         if self.request_id is not None:
             logger.info('Request {} is aborted !'.format(self.request_id))
         
@@ -107,7 +110,7 @@ class InferenceManager:
     def is_aborted(self):
         if self._aborted:
             return True
-        elif hasattr(self.request_manager, 'is_aborted')and self.request_manager.is_aborted(self.request_id):
+        elif hasattr(self.request_manager, 'is_aborted') and self.request_manager.is_aborted(self.request_id):
             self.abort()
             return True
         else:

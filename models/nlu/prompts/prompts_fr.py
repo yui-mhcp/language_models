@@ -16,13 +16,13 @@ _default_formats    = {
         {%- if personnality -%}
             {{- personnality + "\n\n" -}}
         {%- endif -%}
-
-        {%- if python_tools -%}
-            {{- python_tools + "\n\n" -}}
-        {%- endif -%}
         
         {%- if paragraphs and not paragraphs_in_last_message -%}
             {{- paragraphs + "\n\n" -}}
+        {%- endif -%}
+
+        {%- if python_tools -%}
+            {{- python_tools + "\n\n" -}}
         {%- endif -%}
 
         {%- if memories -%}
@@ -83,25 +83,45 @@ _default_formats    = {
                     {{- "- Titre : " + para['title'] + "\n" -}}
                 {%- endif -%}
             {%- endif -%}
-
+            
             {% if 'page' in para and para['page'] != last_para['page'] -%}
                 {{- "- Page #" + para['page']|string + "\n" -}}
             {%- endif -%}
-            
-            {%- if 'type' not in para -%}
+
+            {% if para['content'] %}
+                {% for c in para['content'] %}
+                    {% if c['type'] == 'text' %}
+                        {{- c['text']|trim -}}
+                    {% elif c['type'] == 'image' and image_token %}
+                        {{- image_token -}}
+                    {% elif c['type'] == 'audio' and audio_token %}
+                        {{- audio_token -}}
+                    {% elif c['type'] == 'video' and video_token %}
+                        {{- video_token -}}
+                    {% endif %}
+                {% endfor %}
+            {%- elif 'type' not in para -%}
                 {{- para['text']|trim -}}
             {%- elif para['type'] == 'text' -%}
                 {{- para['text'] | trim -}}
+            {% elif para['type'] == 'image' and image_token %}
+                {{- image_token -}}
+            {% elif para['type'] == 'audio' and audio_token %}
+                {{- audio_token -}}
+            {% elif para['type'] == 'video' and video_token %}
+                {{- video_token -}}
             {%- elif para['type'] == 'code' -%}
                 {{- "```" + para["language"] + "\n" + para["text"] | trim + "\n```" -}}
             {%- elif para['type'] == 'list' -%}
                 {%- for item in para['items'] -%}
-                    {{- "\n- " + item|string }}
+                    {{- "\n- " + item|string|trim -}}
                 {%- endfor -%}
             {%- elif para['type'] == 'table' -%}
                 {%- for item in para['rows'] -%}
-                    {{- "\n- " + item|string }}
+                    {{- "\n- " + item|string|trim -}}
                 {%- endfor -%}
+            {%- elif 'text' in para %}
+                {{- para['text']|trim -}}
             {%- endif -%}
         {%- endfor -%}
 
@@ -147,7 +167,7 @@ _default_formats    = {
         {%- endif -%}
 
         {% for instruct in instructions %}
-            {{- "\n- " + instruct -}}
+            {{- "\n- " + instruct.content|trim -}}
         {% endfor %}
 
         {%- if prompt_format == 'html' -%}
@@ -169,7 +189,23 @@ _default_formats    = {
         {%- endif -%}
 
     """),
-    'message_format'    : None,
+    'message_format'    : dedent("""
+        {%- if message['attachments'] -%}
+            {{- "Attachments:" -}}
+            {%- if message['attachments']|length == 1 -%}
+                {{- " " + message['attachments'][0] + "\n\n" -}}
+            {%- else -%}
+                {%- for file in message['attachments'] -%}
+                    {{- "\n- " + file -}}
+                {%- endfor -%}
+                {{- "\n\n" -}}
+            {%- endif -%}
+        {%- endif -%}
+        
+        {%- if text is string -%}
+            {{- text -}}
+        {%- endif -%}
+    """),
     'last_message_format'   : dedent("""
         {%- if messages and messages|length > 2 and prompt_format == 'html'  -%}
             {{- "\n</conversation>\n\n" -}}
@@ -186,8 +222,10 @@ _default_formats    = {
         {%- if instructions and instruct_in_last_message -%}
             {{- instructions + "\n\n" -}}
         {%- endif -%}
-
-        {{- text -}}
+        
+        {%- if text is string -%}
+            {{- text -}}
+        {%- endif -%}
     """)
 
 
@@ -245,9 +283,7 @@ prompts_summarize  = {
 }
 
 prompts_extract_entities  = {
-    'format'    : dedent("""
-        {{- text -}}
-        
+    'suffix'    : dedent("""
         {{- "Retrouve les informations demandées et fais-en un résumé clair et concis au format JSON. Si une information est manquante, mets `null`.\n\n" }}
 
         {{- "Voici les informations à extraire :\n```json\n{\n" }}

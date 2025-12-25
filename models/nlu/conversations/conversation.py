@@ -16,8 +16,9 @@ from dataclasses import dataclass, field
 
 from .message import Message
 from utils import load_json, dump_json
-from utils.text.parsers import parse_document
-    
+
+CONTENT_KEYS    = ('text', 'image', 'audio', 'video', 'image_url', 'audio_url', 'video_url')
+
 @dataclass(unsafe_hash = True)
 class Conversation:
     """
@@ -52,13 +53,12 @@ class Conversation:
     prompts : Dict[str, str]    = field(default_factory = dict, hash = False, repr = False)
     
     messages    : List[Message] = field(default_factory = list, hash = False, repr = False)
-    pinned      : List[Message] = field(default_factory = list, hash = False, repr = False)
+    documents   : List[str]     = field(default_factory = list, hash = False, repr = False)
     instructions    : List[Message] = field(default_factory = list, hash = False, repr = False)
     
-    documents   : List[Message]  = field(default_factory = list, hash = False, repr = False)
     metadata    : Dict[str, Any] = field(default_factory = dict, hash = False, repr = False)
     
-    __state_fields__    = ('messages', 'pinned', 'instructions', 'documents')
+    __state_fields__    = ('messages', 'instructions', 'documents')
     
     @property
     def users(self):
@@ -76,13 +76,6 @@ class Conversation:
     def has_documents(self):
         return bool(self.documents)
     
-    @property
-    def paragraphs(self):
-        paragraphs = []
-        for doc in self.documents:
-            paragraphs.extend(parse_document(doc.content))
-        return paragraphs
-    
     def __len__(self):
         return len(self.messages)
     
@@ -93,38 +86,63 @@ class Conversation:
         """ Returns whether `message_id` is in the conversation """
         return any(msg.id == message_id for msg in reversed(self.messages))
     
-    def _append(self, _state, content, /, *, role = None, ** kwargs):
-        if role is None: role = 'user' if 'user' in kwargs else 'assistant'
-        
-        metadata = {
-            k : kwargs.pop(k) for k in list(kwargs.keys())
-            if k not in Message.__dataclass_fields__
-        }
+    def _append(self, _state, content, /, role, conv_id = None, metadata = None, ** kwargs):
+        if metadata is None:
+            metadata = {
+                k : kwargs.pop(k) for k in list(kwargs.keys())
+                if k not in Message.__dataclass_fields__
+            }
         message = Message(
             content = content, role = role, conv_id = self.id, metadata = metadata, ** kwargs
         )
         _state.append(message)
         return message
 
-    def add_document(self, document, *, content_type = 'document', ** kwargs):
+    def add_document(self, document, ** kwargs):
         """ Add a new document to the conversation """
-        if any(doc.content == document for doc in self.documents): return None
-        return self._append(self.documents, document, content_type = content_type, ** kwargs)
+        if isinstance(document, str): document = [document]
+        document = list(set(doc for doc in document if doc not in self.documents))
+        self.documents.extend(document)
+        return document
     
-    def add_instruction(self, instruction, *, content_type = 'text', ** kwargs):
+    def add_instruction(self, instruction, *, role = 'user', ** kwargs):
         """ Add a new instruction to the conversation """
         if any(inst.content == instruction for inst in self.instructions): return None
-        return self._append(self.instructions, instruction, content_type = content_type, ** kwargs)
+        return self._append(self.instructions, instruction, role = role, ** kwargs)
 
-    def add_message(self, text, *, content_type = 'text', ** kwargs):
+    def add_message(self, _message = None, /, *, documents = None, ** kwargs):
         """ Add a new message to the conversation """
-        if isinstance(text, dict):
-            content = text.pop('content' if 'content' in text else 'text')
-            if 'content_type' not in text: kwargs['content_type'] = content_type
-            kwargs.update(text)
-            return self._append(self.messages, content, ** kwargs)
+        if _message is not None:
+            if isinstance(_message, str):       kwargs['text'] = _message
+            elif isinstance(_message, dict):    kwargs.update(_message)
+        
+        if 'content' in kwargs:
+            content = kwargs.pop('content')
         else:
-            return self._append(self.messages, text, content_type = content_type, ** kwargs)
+            contents = {
+                k : kwargs.pop(k) for k in CONTENT_KEYS if kwargs.get(k, None) is not None
+            }
+
+            if len(contents) == 0:
+                raise RuntimeError('At least one content key should be provided : {}'.format(CONTENT_KEYS))
+            elif len(contents) == 1 and 'text' in contents:
+                content = contents['text']
+            else:
+                content = []
+                for k, v in contents.items():
+                    if isinstance(v, str):
+                        content.append({k : v, 'type' : k.replace('_url', '')})
+                    elif isinstance(v, list):
+                        for vi in v:
+                            content.append({k : vi, 'type' : k.replace('_url', '')})
+                    else:
+                        raise ValueError('Unsupported {} type : {}'.format(k, type(v)))
+        
+        if documents:
+            if isinstance(documents, str): documents = [documents]
+            kwargs['attachments'] = self.add_document(documents)
+        
+        return self._append(self.messages, content, ** kwargs)
 
     append = add_message
     
@@ -134,11 +152,8 @@ class Conversation:
     def remove_document(self, document):
         if isinstance(document, int):
             return self.documents.pop(document)
-        
-        for idx in range(len(self.documents)):
-            if self.documents[idx].content == document:
-                return self.documents.pop(idx)
-        raise IndexError('The filename `{}` is not in the conversation'.format(filename))
+        else:
+            return self.documents.remove(document)
     
     def remove_instruction(self, instruction):
         if isinstance(instruction, int):
@@ -158,7 +173,7 @@ class Conversation:
     @classmethod
     def load(cls, filename):
         conv = load_json(filename, default = {}) if isinstance(filename, str) else filename
-        for k in conv.__state_fields__:
+        for k in ('messages', 'instructions'):
             conv[k] = [Message(** msg) for msg in conv[k]]
         
         return cls(** conv)
