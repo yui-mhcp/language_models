@@ -10,35 +10,35 @@
 # limitations under the License.
 
 from .tool import Tool
-from ..prompts import prompt_docstring
+from ..prompts import add_multilingual_docstring
 
-@prompt_docstring(
+@add_multilingual_docstring(
     en = "Use a LLM to answer a question",
     fr = "Utilise un LLM pour répondre à une question"
 )
 def ask(question : str, *, model, ** _):
     return model.answer(question)
 
-@prompt_docstring(
+@add_multilingual_docstring(
     en = "Ask a `question` to an expert. Provide the expected expert background in the `background` argument",
     fr = "Pose une question à un expert. Spécifie le type d'expert recherché dans l'argument `background`"
 )
 def ask_expert(question : str, domain : str, background : str, *, model, **_):
     return model.ask_expert(question, domain = domain, background = background)
 
-@prompt_docstring(
+@add_multilingual_docstring(
     en = "Translate `text` from `lang` to `target_lang`",
     fr = "Traduit la requête vers `target_lang`"
 )
 def translate(text : str, lang : str, target_lang : str, *, model, ** _):
     return model.translate(text, lang = lang, target_lang = target_lang)
     
-@prompt_docstring(
+@add_multilingual_docstring(
     en = "Use a LLM to summarize `text`",
     fr = "Utilise un LLM pour résumer un texte"
 )
 def summarize(text : str, *, model, ** _):
-    return model.summarize(text, lang = lang, target_lang = target_lang)
+    return model.summarize(text)
 
 
 QATool          = Tool.from_function(ask)

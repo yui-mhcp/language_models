@@ -15,14 +15,14 @@ from functools import cached_property
 from dataclasses import dataclass, field
 from typing import Dict, Any, List, Callable, Optional, Union
 
-from ..prompts import Prompt, get_prompt
+from ..prompts import get_translation
 
 _globals_ignore = {'self', 'model'}
 
 @dataclass
 class Tool:
     name    : str
-    description : Union[Prompt, Dict, str]
+    description : Union[Dict, str]
     function    : Callable  = field(repr = False)
     instructs   : List  = field(default_factory = list, repr = False)
     ignore      : List  = field(default_factory = list, repr = False)
@@ -51,16 +51,16 @@ class Tool:
     def to_signature(self, lang = 'en'):
         return "def {}{}:\n    {}".format(
             self.name, self.signature,
-            get_prompt(self.description, lang).replace('\n', '\n    ').strip()
+            get_translation(self.description, lang).replace('\n', '\n    ').strip()
         )
 
     def get_instructions(self, lang = 'en'):
-        return [get_prompt(instruct) for instruct in self.instructions]
+        return [get_translation(instruct) for instruct in self.instructions]
     
     def to_json(self, lang = 'en'):
         return {
             "name"  : self.name,
-            "description"   : get_prompt(self.description, lang),
+            "description"   : get_translation(self.description, lang),
             "properties"    : {
                 name : {"name" : name}
                 for name, param in self.signature.parameters.items()

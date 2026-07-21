@@ -1,0 +1,145 @@
+[build-system]
+# >= 77 for PEP 639 SPDX `license` expressions
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "yui-language-models"
+# Single-sourced from `__version__.py` — see [tool.setuptools.dynamic] below.
+dynamic = ["version"]
+description = "Large-Language-Model (LLM) toolkit built on the `BaseModel` interface: a keras `TextGenerator`, retrieval-augmented generation (RAG), function calling, multimodal support and TensorRT-LLM accelerated inference"
+readme = "README.md"
+# Pinned to 3.12: like base_dl_project this project needs a real keras backend, and the
+# TensorRT-LLM (< 1.3) accelerated inference pins a full workstation to 3.12 — see INSTALLATION.md.
+requires-python = "==3.12.*"
+license = "AGPL-3.0-or-later"
+license-files = ["LICENCE"]
+authors = [{ name = "yui", email = "yui-mhcp@tutanota.com" }]
+keywords = ["deep-learning", "keras", "llm", "rag", "nlp", "transformers", "tensorrt"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "License :: OSI Approved :: GNU Affero General Public License v3 or later (AGPLv3+)",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Text Processing :: Linguistic",
+    "Operating System :: OS Independent",
+]
+
+# LLM models always need text processing and the `transformers` checkpoints / tokenizers,
+# so — unlike the modality extras of the data_processing socle — these are core dependencies
+# here. Still deliberately free of keras / tensorflow / torch: pick a backend via [tf] / [torch].
+dependencies = [
+    # --- shared utils / loggers socle (see base_dl_project / data_processing) ---
+    "numpy<2",          # TensorRT-LLM accelerated inference requires numpy < 2
+    "tqdm",             # utils/file_utils.py
+    "pyyaml",           # utils/file_utils.py
+    "matplotlib",       # utils/plot_utils.py, re-exported by utils/__init__.py
+    "requests",         # loggers/telegram_handler.py + utils/text/web
+    "h5py",             # utils/file_utils.py: hdf5 load/dump
+    "msgspec",          # utils/file_utils.py: fast json (guarded by try/except)
+    "scikit-learn",     # utils/plot_utils.py + utils/datasets/builder.py
+    "umap-learn",       # utils/plot_utils.py: embeddings projection
+    # --- text (eagerly imported by utils/text, used by every tokenizer / prompt) ---
+    "regex",
+    "unidecode",
+    "num2words",
+    "beautifulsoup4",
+    "python-docx",
+    "jinja2",
+    "pypdfium2",
+    "sentencepiece",
+    # --- LLM checkpoints + tokenizers ---
+    "transformers",
+]
+
+[project.urls]
+Homepage = "https://github.com/yui-mhcp"
+Repository = "https://github.com/yui-mhcp/language_models"
+Changelog = "https://github.com/yui-mhcp/language_models/blob/main/CHANGELOG.md"
+Issues = "https://github.com/yui-mhcp/language_models/issues"
+
+[project.optional-dependencies]
+# --- keras backends (mutually exclusive: pick the one matching your setup) ----
+torch = [
+    "keras>=3",
+    "torch",
+]
+tf = [
+    "keras>=3",
+    "tensorflow",
+    "torch",            # still required to convert some pytorch checkpoints
+]
+# `[keras]` is an alias of `[tf]` (self-referencing extra, needs pip >= 21.2).
+# Tied to [project].name: renaming the project breaks this alias.
+keras = [
+    "yui-language-models[tf]",
+]
+
+# Optional modality / dataset helpers (e.g. multimodal image inputs, dataset builders).
+image = [
+    "pillow",
+    "opencv-python",
+    "imageio",
+    "networkx",
+]
+datasets = [
+    "pandas",
+    "tensorflow-datasets",
+]
+
+dev = [
+    "pytest>=7.0",
+    "pytest-cov",
+    "pytest-xdist",
+    "pytest-timeout",   # per-test deadlock guard (see [tool.pytest.ini_options].timeout)
+]
+
+# NOTE: TensorRT-LLM (`tensorrt_llm`) is intentionally NOT exposed as a pip extra: it is
+# installed from the NVIDIA package index with backend-specific CUDA constraints. See
+# INSTALLATION.md for the step-by-step accelerated-inference setup.
+
+[tool.setuptools.packages.find]
+include = ["utils*", "loggers*", "models*", "architectures*", "custom_train_objects*"]
+
+[tool.setuptools.dynamic]
+version = { attr = "__version__.__version__" }
+
+[tool.pytest.ini_options]
+minversion = "7.0"
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+norecursedirs = [
+    "data", "tmp", "__reproduction", "__pycache__", ".ipynb_checkpoints",
+    "notebooks", "pretrained_models",
+]
+addopts = "-ra --strict-markers"
+filterwarnings = ["ignore"]
+timeout = 60
+markers = [
+    "tensorflow: requires `tensorflow` to be installed (auto-skipped otherwise)",
+    "keras: requires `keras` to be installed, e.g. to build tensors (auto-skipped otherwise)",
+    "torch: requires `torch` to be installed (auto-skipped otherwise)",
+    "cv2: requires `opencv-python` (cv2) to be installed (auto-skipped otherwise)",
+    "gpu: requires a GPU to run",
+    "slow: slow test (heavy models / long compute) — deselect with -m 'not slow'",
+    "reproducibility: compares against a stored golden file",
+]
+
+[tool.coverage.run]
+branch = true
+source = ["utils", "models", "architectures", "loggers", "custom_train_objects"]
+omit = ["tests/*", "*/notebooks/*", "*/pretrained_models/*"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+exclude_lines = [
+    "pragma: no cover",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+]

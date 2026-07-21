@@ -9,38 +9,41 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import os
-import importlib
+from functools import partial
 
+from utils.generic_utils import import_submodules
+
+_globals = {}
 _selectors = {}
-for module in os.listdir(__package__.replace('.', os.path.sep)):
-    if module.startswith(('.', '_')) or '_old' in module: continue
-    module = importlib.import_module(__package__ + '.' + module.replace('.py', ''))
-    
+for module in import_submodules(__package__):
     for k, v in vars(module).items():
         if k.startswith('select_'):
+            _globals[k] = v
             _selectors[k[7:].lower()] = v
         elif k.endswith('Selector'):
+            _globals[k] = v
             _selectors[k[:-8].lower()] = v
 
-def get_selector(name, ** kwargs):
+globals().update(_globals)
+del _globals
+
+def get_selector(selector, ** kwargs):
     """ Return the item selector (callable or class) associated to the given `name` """
-    if isinstance(name, type):
-        return name(** kwargs)
-    elif callable(name):
-        return name
-    elif isinstance(name, str):
-        name = name.lower()
-        if name.startswith('select_'):  name = name[7:]
-        elif name.endswith('selector'): name = name[:-8]
+    if isinstance(selector, dict):
+        kwargs.update(selector)
+        selector = kwargs.pop('name')
+    
+    if isinstance(selector, str):
+        selector = selector.lower()
+        if selector.startswith('select_'):  selector = selector[7:]
+        elif selector.endswith('selector'): selector = selector[:-8]
         
-        if name not in _selectors:
-            raise ValueError('Unknown item selector : {}\n  Accepted : {}'.format(
-                name, tuple(_selectors.keys())
-            ))
-        
-        selector = _selectors[name]
-        return selector(** kwargs) if isinstance(selector, type) else selector
+        selector = _selectors.get(selector, None)
+
+    if isinstance(selector, type):
+        return selector(** kwargs)
+    elif callable(selector):
+        return selector if not kwargs else partial(selector, ** kwargs)
     else:
         raise ValueError('Unsupported selector : {}'.format(name))
 
@@ -65,8 +68,7 @@ def select_items(query, items, *, selector = 'last', ** kwargs):
     """
     if not items: return [], 0
 
-    if isinstance(selector, (str, type)):
+    if isinstance(selector, (str, dict, type)):
         selector = get_selector(selector, ** kwargs)
     
     return selector(query, items, ** kwargs)
-    

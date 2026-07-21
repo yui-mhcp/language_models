@@ -9,15 +9,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import os
 import math
 
 from typing import Union
 
+from utils import dedent
 from .tool import Tool
-from ..prompts import dedent, prompt_docstring
+from ..prompts import add_multilingual_docstring
 
-@prompt_docstring(
+@add_multilingual_docstring(
     en = "Perform semantic search of `query` and return the `k` most relevant passages in `documents`.",
     fr = dedent("""
     Retourne les `k` paragraphes les plus pertinents dans les `documents` fournis.
@@ -44,16 +44,19 @@ def rag(query   : Union[str, list],
         retriever   = None
        ):
     if isinstance(query, str): query = [query]
-    
+
     if isinstance(retriever, str):
         from models import get_pretrained
         retriever = get_pretrained(retriever)
 
-    db  = retriever.predict(documents = documents, save = False)
-    retrieved = retriever.retrieve(
-        query, db, reverse = reverse, k = max(2,int(math.ceil(k / len(query)))), run_eagerly = True
+    from models.encoder.rag import index_data, search
+
+    # in-memory database (`database = None`), re-built at each call
+    db  = index_data(retriever, None, documents = documents, save = False)
+    retrieved = search(
+        retriever, db, query, reverse = reverse, k = max(2,int(math.ceil(k / len(query)))), run_eagerly = True
     )
-    
+
     results = []
     for res in retrieved:
         results.extend(res)

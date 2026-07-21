@@ -408,6 +408,3 @@ class NodeWrapper(Node):
             ** super().get_config(),
             'nodes' : [node.get_config() for node in self.nodes]
         }
-    
-    
-    

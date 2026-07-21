@@ -9,16 +9,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import os
-import importlib
-
+from utils.generic_utils import import_submodules
 from .tool import Tool
 from .tool_executor import execute_code, extract_code, format_code_result, remove_simulated_output
 
-for module in os.listdir(__package__.replace('.', os.path.sep)):
-    if module.startswith(('.', '_')) or '_old' in module: continue
-    module = importlib.import_module(__package__ + '.' + module.replace('.py', ''))
-    
+for module in import_submodules(__package__):
     globals().update({
         k : v for k, v in vars(module).items() if isinstance(v, type) and issubclass(v, Tool)
     })

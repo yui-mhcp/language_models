@@ -1,0 +1,25 @@
+cff-version: 1.2.0
+message: "If you use this project in your work, please cite it as below."
+title: "language_models: an LLM / RAG toolkit built on the BaseModel interface (TextGenerator + TensorRT-LLM)"
+abstract: >-
+  Large-Language-Model (LLM) toolkit built on the `BaseModel` interface, providing a
+  keras `TextGenerator`, retrieval-augmented generation (RAG), function calling,
+  multimodal (text + image) support and TensorRT-LLM accelerated inference — part of
+  the yui-mhcp projects.
+authors:
+  - name: "yui"
+    email: "yui-mhcp@tutanota.com"
+type: software
+version: 1.0.0
+date-released: 2026-07-21
+license: AGPL-3.0-or-later
+url: "https://github.com/yui-mhcp"
+repository-code: "https://github.com/yui-mhcp/language_models"
+keywords:
+  - deep-learning
+  - keras
+  - llm
+  - rag
+  - nlp
+  - transformers
+  - tensorrt

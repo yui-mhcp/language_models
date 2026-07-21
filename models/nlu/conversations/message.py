@@ -57,7 +57,7 @@ class Message:
         if isinstance(self.content, str):
             return self.content
         else:
-            return '\n'.join(content['text'] for content in self.content if context.get('text', None))
+            return '\n'.join(content['text'] for content in self.content if content.get('text', None))
     
     def __getitem__(self, key):
         if key == 'text':           return self.text
@@ -79,11 +79,26 @@ class Message:
         
     def filter(self, *, full_match = True, ** kwargs):
         fn = all if full_match else any
-        return fn(hasattr(self, k) and getattr(self, k) == v for k, v in kwargs.items())
-    
+        return fn(k in self and self[k] == v for k, v in kwargs.items())
+
     def to_json(self):
         data = self.__dict__.copy()
         data.update(data.pop('metadata'))
         return data
-    
+
     to_dict = to_json
+
+    @classmethod
+    def from_dict(cls, data):
+        """
+            Rebuilds a `Message` from a (possibly flattened) dict, routing any key that is not
+            a dataclass field into `metadata`. This is the symmetric counterpart of `to_json`
+            (which flattens `metadata` to the top level) : together they make the
+            serialize / deserialize round-trip lossless for arbitrary metadata keys.
+        """
+        fields   = cls.__dataclass_fields__
+        kwargs   = {k : v for k, v in data.items() if k in fields}
+        metadata = dict(kwargs.pop('metadata', None) or {})
+        metadata.update({k : v for k, v in data.items() if k not in fields})
+        kwargs['metadata'] = metadata
+        return cls(** kwargs)

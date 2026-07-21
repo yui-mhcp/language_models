@@ -58,4 +58,3 @@ class AnyNode(ParallelIteratorNode):
                 return True
         
         return False
-        

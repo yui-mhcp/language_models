@@ -9,17 +9,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import os
-import importlib
-
+from utils.generic_utils import import_submodules
 from .node import Node
 
 _nodes = {}
 
-for module in os.listdir(__package__.replace('.', os.path.sep)):
-    if module.startswith(('.', '_')) or '_old' in module: continue
-    module = importlib.import_module(__package__ + '.' + module.replace('.py', ''))
-    
+for module in import_submodules(__package__):
     _nodes.update({
         k : v for k, v in vars(module).items() if isinstance(v, type) and issubclass(v, Node)
     })

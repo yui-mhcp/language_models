@@ -116,4 +116,3 @@ class ParallelIteratorNode(IteratorNode):
             for item in iterable
         ]
         return [out.get() for out in outputs]
-        

@@ -38,4 +38,3 @@ class ContextValueNode(Node):
     
     def get_config(self):
         return {** super().get_config(), 'source_key' : self.source_key}
-    

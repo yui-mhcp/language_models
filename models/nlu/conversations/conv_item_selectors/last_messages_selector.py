@@ -9,12 +9,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from .utils import estimate_token_budget
+
 def select_last_messages(query,
                          items,
                          *,
                          
                          tokenizer,
                          
+                         skip   = 0,
                          max_length = None,
                          min_messages   = 1,
                          max_messages   = 5,
@@ -45,14 +48,16 @@ def select_last_messages(query,
     for message in reversed(items):
         if message.get('role', '') == 'system':
             continue
+        elif n < skip:
+            n += message.get('role', '') == 'user'
+            continue
         
-        if not message.get('length', None) and isinstance(message.get('content', None), str):
-            message['length'] = len(tokenizer.tokenize(message['content']))
+        length = estimate_token_budget(message, tokenizer)
 
-        if messages and n >= min_messages and total_length + message.get('length', 0) > max_length:
+        if messages and n >= min_messages and total_length + length > max_length:
             break
 
-        total_length += message.get('length', 0)
+        total_length += length
         messages.append(message)
 
         if message['role'] == 'user':
@@ -60,5 +65,4 @@ def select_last_messages(query,
             if n == max_messages:
                 break
 
-    return messages[::-1]
-
+    return messages[::-1], total_length

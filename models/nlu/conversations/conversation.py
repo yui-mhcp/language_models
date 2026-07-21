@@ -10,12 +10,15 @@
 # limitations under the License.
 
 import uuid
+import logging
 
 from typing import List, Dict, Any
 from dataclasses import dataclass, field
 
 from .message import Message
 from utils import load_json, dump_json
+
+logger = logging.getLogger(__name__)
 
 CONTENT_KEYS    = ('text', 'image', 'audio', 'video', 'image_url', 'audio_url', 'video_url')
 
@@ -33,7 +36,6 @@ class Conversation:
                           should be a mapping `{prompt_key : prompt}`
             
             - messages  : the list of messages in this conversation
-            - pinned    : messages pinned in the conversation
             - instructions  : special instructions for the model, specific to this conversation
             
             - documents : a list of documents (filenames) associated to this conversation
@@ -43,7 +45,7 @@ class Conversation:
         
         Note that a conversation can be single- or multi- users
         
-        The `pinned` and `instructions` are forwarded to the tokenizer `encode_chat` method.
+        The `instructions` are forwarded to the tokenizer `encode_chat` method.
         They should therefore be used in one of the prompt format to be given to the model.
         By default, the `system_prompt` adds these special messages in the context.
     """
@@ -130,13 +132,16 @@ class Conversation:
             else:
                 content = []
                 for k, v in contents.items():
-                    if isinstance(v, str):
-                        content.append({k : v, 'type' : k.replace('_url', '')})
-                    elif isinstance(v, list):
-                        for vi in v:
+                    if not isinstance(v, (list, tuple)): v = [v]
+                    
+                    for vi in v:
+                        if isinstance(vi, str):
                             content.append({k : vi, 'type' : k.replace('_url', '')})
-                    else:
-                        raise ValueError('Unsupported {} type : {}'.format(k, type(v)))
+                        elif isinstance(vi, dict):
+                            content.append(vi)
+                        else:
+                            logger.error('Unsupported {} type : {}'.format(k, vi))
+                            continue
         
         if documents:
             if isinstance(documents, str): documents = [documents]
@@ -166,7 +171,18 @@ class Conversation:
     
     def save(self, filename):
         return dump_json(filename, self, indent = 2)
-    
+
+    def get_snapshot(self):
+        """
+            Full conversation state **minus** the message stream (persisted separately in the
+            append-log). Used to write the lightweight `conversation.json` snapshot, so the
+            (potentially long) message list is never rewritten on every turn.
+        """
+        return {
+            field : getattr(self, field)
+            for field in self.__dataclass_fields__ if field != 'messages'
+        }
+
     def set_state(self, state):
         self.__dict__.update(state)
 
@@ -174,8 +190,9 @@ class Conversation:
     def load(cls, filename):
         conv = load_json(filename, default = {}) if isinstance(filename, str) else filename
         for k in ('messages', 'instructions'):
-            conv[k] = [Message(** msg) for msg in conv[k]]
-        
+            if k in conv:
+                conv[k] = [Message.from_dict(msg) for msg in conv[k]]
+
         return cls(** conv)
 
 def set_paragraph_content(paragraphs):

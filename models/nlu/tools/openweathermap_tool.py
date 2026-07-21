@@ -15,11 +15,11 @@ import requests
 from datetime import datetime
 
 from .tool import Tool
-from ..prompts import prompt_docstring
+from ..prompts import add_multilingual_docstring
 
 base_url = "http://api.openweathermap.org/data/2.5/weather"
 
-@prompt_docstring(
+@add_multilingual_docstring(
     en = "Get weather information from the OpenWeatherMap API",
     fr = "Récupère les informations météos de l'API OpenWeatherMap"
 )

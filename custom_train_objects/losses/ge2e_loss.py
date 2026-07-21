@@ -147,7 +147,7 @@ class GE2ELoss(keras.losses.Loss):
                 K.divide_no_nan(centroids, K.norm(centroids, axis = -1, keepdims = True))
             )
         elif distance_metric == 'dp':
-            return _einsum_matmul(label_embeddings, centroids)
+            return _einsum_matmul(embeddings, centroids)
         elif distance_metric == 'manhattan':
             return - K.sum(K.abs(embeddings - centroids), axis = -1)
 
